@@ -117,6 +117,9 @@ class MultipromptRandomCameraDataset4Test(IterableDataset):
         batch_dict["noise"] = self.noises[0][None, :]
         # then add prompt
         batch_dict.update(batch)
+        # override the height and width
+        batch_dict['height'] = self.cfg.eval_height
+        batch_dict['width'] = self.cfg.eval_width
         return batch_dict
     
 

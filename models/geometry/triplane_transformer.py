@@ -149,6 +149,17 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
             coordinates = points,
         ).view(*points.shape[:-1],-1)
         
+    def rescale_points(
+        self,
+        points: Float[Tensor, "*N Di"],
+    ):
+        # transform points from original space to [-1, 1]^3
+        points = contract_to_unisphere_custom(
+            points, 
+            self.bbox, 
+            self.unbounded
+        )
+        return points
 
     def forward(
         self,
@@ -159,11 +170,7 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
 
         batch_size, n_points, n_dims = points.shape
         points_unscaled = points
-        points = contract_to_unisphere_custom(
-            points, 
-            self.bbox, 
-            self.unbounded
-        )  # points normalized to (-1, 1)
+        points = self.rescale_points(points)
 
         if output_normal and self.cfg.normal_type == "analytic":
             raise NotImplementedError("analytic normal is not implemented yet.")
@@ -223,10 +230,7 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
         assert points.shape[0] == batch_size, "points and space_cache should have the same batch size in forward_sdf"
         points_unscaled = points
 
-        points = contract_to_unisphere_custom(
-            points_unscaled, 
-            self.bbox, self.unbounded
-        )   # points normalized to (-1, 1)
+        points = self.rescale_points(points)
 
         # sample from planes
         enc = self.interpolate_encodings(
@@ -248,10 +252,7 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
         assert points.shape[0] == batch_size, "points and space_cache should have the same batch size in forward_sdf"
         points_unscaled = points
 
-        points = contract_to_unisphere_custom(
-            points_unscaled, 
-            self.bbox, self.unbounded
-        )   # points normalized to (-1, 1)
+        points = self.rescale_points(points)
 
         # sample from planes
         enc = self.interpolate_encodings(points, space_cache)      
@@ -278,11 +279,7 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
         if self.cfg.n_feature_dims == 0:
             return out
         points_unscaled = points
-        points = contract_to_unisphere_custom(
-            points_unscaled, 
-            self.bbox, 
-            self.unbounded
-        )
+        points = self.rescale_points(points)
 
         # sample from planes
         enc = self.interpolate_encodings(points, space_cache)
@@ -295,7 +292,7 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
             }
         )
         return out
-
+    
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
         if (
             self.cfg.normal_type == "finite_difference"

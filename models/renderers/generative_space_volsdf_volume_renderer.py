@@ -96,7 +96,7 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
         space_cache: Optional[Float[Tensor, "B ..."]] = None,
         text_embed: Optional[Float[Tensor, "B C"]] = None,
         **kwargs
-    ) -> Dict[str, Float[Tensor, "..."]]:    
+    ) -> Dict[str, Float[Tensor, "..."]]:
         batch_size, height, width = rays_o.shape[:3]
         batch_size_space_cache = text_embed.shape[0] if text_embed is not None else batch_size
 

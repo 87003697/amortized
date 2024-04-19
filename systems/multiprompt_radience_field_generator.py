@@ -191,6 +191,8 @@ class MultipromptRadienceFieldGeneratorSystem(BaseLift3DSystem):
                 ).mean()
                 self.log("train/loss_eikonal", loss_eikonal)
                 loss += loss_eikonal * self.C(self.cfg.loss.lambda_eikonal)
+            
+            if "inv_std" in out:
                 self.log("train/inv_std", out["inv_std"], prog_bar=True)
 
         else:
@@ -223,15 +225,15 @@ class MultipromptRadienceFieldGeneratorSystem(BaseLift3DSystem):
         # save the image with the same name as the prompt
         name = batch['prompt'][0].replace(',', '').replace('.', '').replace(' ', '_')
 
-        # visualize the depth
-        depth = out["depth"][0, :, :, 0]
-        depth = (depth - depth.min()) / (depth.max() - depth.min())
-
         for batch_idx in tqdm(range(batch_size), desc="Saving test images"):
             # visualize the depth
-            depth = out["depth"][batch_idx, :, :, 0]
-            depth = (depth - depth.min()) / (depth.max() - depth.min())
-
+            if 'depth' in out:
+                render_depth = True
+                depth = out["depth"][batch_idx, :, :, 0]
+                depth = (depth - depth.min()) / (depth.max() - depth.min())
+            else:
+                render_depth = False
+                
             self.save_image_grid(
                 f"it{self.true_global_step}-val/{name}/{str(batch['index'][batch_idx].item())}.png"
                     if self.cfg.validation_via_video
@@ -273,7 +275,7 @@ class MultipromptRadienceFieldGeneratorSystem(BaseLift3DSystem):
                             "kwargs": {"cmap": None, "data_range": (0, 1)},
                         },
                     ]
-                    if 'depth' in out
+                    if render_depth
                     else []
                 ),
 
