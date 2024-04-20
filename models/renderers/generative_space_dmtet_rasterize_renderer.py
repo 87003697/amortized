@@ -141,7 +141,7 @@ class GenerativeSpaceVolSDFVolumeRenderer(NVDiffRasterizer):
                 geo_out = self.geometry(
                     positions[None, ...],
                     space_cache[batch_idx: batch_idx+1],
-                    output_normal= self.training, # only output normal and related info during training
+                    output_normal= False, #self.training, # only output normal and related info during training
                 )
 
                 extra_geo_info = {}
@@ -219,8 +219,8 @@ class GenerativeSpaceVolSDFVolumeRenderer(NVDiffRasterizer):
             if torch.all(sdf > 0) or torch.all(sdf < 0):
                 threestudio.info("All sdf values are positive or negative, no isosurface")
 
-                sdf_mean = torch.mean(sdf).detach()
-                sdf = sdf - sdf_mean
+
+                # attempt 1
                 # # if no sdf with 0, manually add 5% to be 0
                 # sdf_copy = sdf.clone()
                 # with torch.no_grad():
@@ -229,10 +229,20 @@ class GenerativeSpaceVolSDFVolumeRenderer(NVDiffRasterizer):
                 #     # get the threshold
                 #     threshold = torch.topk(sdf_abs.flatten(), int(0.02 * sdf_abs.numel()), largest=False).values[-1]
                 #     # find the points that are closest to 0
-                #     idx = torch.where(sdf_abs < threshold)
-                
-                # # set the sdf to 0
+                #     idx = torch.where(sdf_abs < thres hold)
                 # sdf[idx] = 0.0 * sdf[idx]
+
+                # # attempt 2
+                # # subtract the mean
+                # # sdf_mean = torch.mean(sdf)
+                # sdf_mean = torch.mean(sdf).detach()
+                # sdf = sdf - sdf_mean
+
+                # attempt 3
+                # set the sdf values to be the norm of the points
+                sdf_manually = points.norm(dim=-1, p=2, keepdim=True) - self.geometry.cfg
+                sdf = sdf * 0.001 + sdf_manually * 0.999 # allow limited effect of original sdf
+                deformation = deformation * 0.001 + torch.randn_like(deformation) * 0.999 # allow limited effect of original deformation
 
             mesh = self.isosurface_helper(sdf, deformation)
             mesh.v_pos = scale_tensor(
