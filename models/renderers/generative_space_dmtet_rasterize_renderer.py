@@ -92,17 +92,23 @@ class GenerativeSpaceVolSDFVolumeRenderer(NVDiffRasterizer):
             # do rasterization
             if self.training: # requires only 4 views, memory efficient:
                 rast, _ = self.ctx.rasterize(v_pos_clip, mesh.t_pos_idx, (height, width))
+                gb_feat, _ = self.ctx.interpolate(v_pos_clip, rast, mesh.t_pos_idx)
+                depth = gb_feat[..., -2:-1]
             else: # requires about 40 views, GPU OOM, need a for-loop to rasterize
                 rast_list = []
+                depth_list = []
                 n_views_per_rasterize = 4
                 for i in range(0, v_pos_clip.shape[0], n_views_per_rasterize):
                     rast, _ = self.ctx.rasterize(v_pos_clip[i:i+n_views_per_rasterize], mesh.t_pos_idx, (height, width))
                     rast_list.append(rast)
+                    gb_feat, _ = self.ctx.interpolate(v_pos_clip[i:i+n_views_per_rasterize], rast, mesh.t_pos_idx)
+                    depth_list.append(gb_feat[..., -2:-1])
                 rast = torch.cat(rast_list, dim=0)
+                depth = torch.cat(depth_list, dim=0)
 
             mask = rast[..., 3:] > 0
             mask_aa = self.ctx.antialias(mask.float(), rast, v_pos_clip, mesh.t_pos_idx)
-            out = {"opacity": mask_aa, "mesh": mesh}
+            out = {"opacity": mask_aa, "mesh": mesh, "depth": depth}
 
             gb_normal, _ = self.ctx.interpolate_one(mesh.v_nrm, rast, mesh.t_pos_idx)
             gb_normal = F.normalize(gb_normal, dim=-1)
@@ -135,7 +141,7 @@ class GenerativeSpaceVolSDFVolumeRenderer(NVDiffRasterizer):
                 geo_out = self.geometry(
                     positions[None, ...],
                     space_cache[batch_idx: batch_idx+1],
-                    output_normal= self.training, # only output normal and related info during training
+                    output_normal= False, #self.training, # only output normal and related info during training
                 )
 
                 extra_geo_info = {}
@@ -195,12 +201,49 @@ class GenerativeSpaceVolSDFVolumeRenderer(NVDiffRasterizer):
             self.isosurface_helper.grid_vertices,
             self.isosurface_helper.points_range,
             [-1, 1], # hard coded isosurface_bbox
-        )[None, ...].expand(space_cache.shape[0], -1, -1)
+        )
         # get the sdf values    
-        sdf_batch, deformation_batch = self.geometry.forward_field(points, space_cache)
+        sdf_batch, deformation_batch = self.geometry.forward_field(
+            points[None, ...].expand(space_cache.shape[0], -1, -1),
+            space_cache
+        )
         # get the isosurface
         mesh_list = []
-        for sdf, deformation in zip(sdf_batch, deformation_batch):
+
+        # for sdf, deformation in zip(sdf_batch, deformation_batch):
+        for index in range(sdf_batch.shape[0]):
+            sdf = sdf_batch[index]
+            deformation = deformation_batch[index]
+
+            # special case when all sdf values are positive or negative, thus no isosurface
+            if torch.all(sdf > 0) or torch.all(sdf < 0):
+                threestudio.info("All sdf values are positive or negative, no isosurface")
+
+
+                # attempt 1
+                # # if no sdf with 0, manually add 5% to be 0
+                # sdf_copy = sdf.clone()
+                # with torch.no_grad():
+                #     # select the 1% of the points that are closest to 0
+                #     sdf_abs = torch.abs(sdf_copy)
+                #     # get the threshold
+                #     threshold = torch.topk(sdf_abs.flatten(), int(0.02 * sdf_abs.numel()), largest=False).values[-1]
+                #     # find the points that are closest to 0
+                #     idx = torch.where(sdf_abs < thres hold)
+                # sdf[idx] = 0.0 * sdf[idx]
+
+                # # attempt 2
+                # # subtract the mean
+                # # sdf_mean = torch.mean(sdf)
+                # sdf_mean = torch.mean(sdf).detach()
+                # sdf = sdf - sdf_mean
+
+                # attempt 3
+                # set the sdf values to be the norm of the points
+                sdf_manually = points.norm(dim=-1, p=2, keepdim=True) - self.geometry.cfg
+                sdf = sdf * 0.001 + sdf_manually * 0.999 # allow limited effect of original sdf
+                deformation = deformation * 0.001 + torch.randn_like(deformation) * 0.999 # allow limited effect of original deformation
+
             mesh = self.isosurface_helper(sdf, deformation)
             mesh.v_pos = scale_tensor(
                 mesh.v_pos,
