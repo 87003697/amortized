@@ -110,11 +110,27 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
             if batch_size_space_cache != batch_size:
                 # copy the space cache in training
                 assert batch_size > batch_size_space_cache
-                if torch.is_tensor(space_cache):
+                if torch.is_tensor(space_cache): # for triplane-transformer and 3DConv-net
                     space_cache = space_cache.repeat_interleave(
                         batch_size // batch_size_space_cache,
                         dim = 0
                     )
+                elif isinstance(space_cache, Dict): # for hyper-net
+                    new_space_cache = {}
+                    for key, value in space_cache.items():
+                        if torch.is_tensor(value):
+                            new_space_cache[key] = value.repeat_interleave(
+                                batch_size // batch_size_space_cache,
+                                dim = 0
+                            )
+                        elif isinstance(value, list):
+                            new_space_cache[key] = [
+                                v.repeat_interleave(
+                                    batch_size // batch_size_space_cache,
+                                    dim = 0
+                                ) for v in value
+                            ]
+                    space_cache = new_space_cache
                 else:
                     raise NotImplementedError
 

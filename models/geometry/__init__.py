@@ -1,3 +1,4 @@
 from . import (
-    triplane_transformer
+    triplane_transformer,
+    hypernetwork
 )
