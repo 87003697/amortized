@@ -1,1 +1,2 @@
 from .multiprompt_radience_field_generator import MultipromptRadienceFieldGeneratorSystem
+from .multiprompt_dual_renderer_generator import MultipromptDualRendererGeneratorSystem

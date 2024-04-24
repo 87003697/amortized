@@ -15,8 +15,8 @@ from functools import partial
 from tqdm import tqdm
 from threestudio.utils.misc import barrier
 
-@threestudio.register("multiprompt-dual-render-generator-system")
-class MultipromptRadienceFieldGeneratorSystem(BaseLift3DSystem):
+@threestudio.register("multiprompt-dual-renderer-generator-system")
+class MultipromptDualRendererGeneratorSystem(BaseLift3DSystem):
     @dataclass
     class Config(BaseLift3DSystem.Config):
         # in ['coarse', 'geometry', 'texture', 'coarse+geometry']
@@ -24,7 +24,6 @@ class MultipromptRadienceFieldGeneratorSystem(BaseLift3DSystem):
 
         # validation related
         visualize_samples: bool = False
-        validation_via_video: bool = False
 
         # renderering related
         rgb_as_latents: bool = False
@@ -113,6 +112,12 @@ class MultipromptRadienceFieldGeneratorSystem(BaseLift3DSystem):
             # more general case
             batch["text_embed"] = self.prompt_utils.get_global_text_embeddings()
     
+
+        # forward pass
+        batch['space_cache'] = self.geometry.generate_space_cache(
+            styles = batch['noise'],
+            text_embed = batch['text_embed'],
+        )
         if self.cfg.stage == "geometry":
             render_out = self.renderer(**batch, render_rgb=False)
             render_out_2nd = self.renderer_2nd(**batch, render_rgb=False)
@@ -149,6 +154,7 @@ class MultipromptRadienceFieldGeneratorSystem(BaseLift3DSystem):
     def training_step(self, batch, batch_idx):
         out, out_2nd = self(batch)
 
+        # guidance for the first renderer
         if self.cfg.stage == "geometry":
             guidance_inp = out["comp_normal"]
         else:
@@ -161,159 +167,220 @@ class MultipromptRadienceFieldGeneratorSystem(BaseLift3DSystem):
             rgb_as_latents=self.cfg.rgb_as_latents,
         )
 
+        loss = self._compute_loss(guidance_out, out, renderer="1st", **batch)
+
+        # guidance for the second renderer
+        if self.cfg.stage == "geometry":
+            guidance_inp_2nd = out_2nd["comp_normal"]
+        else:
+            guidance_inp_2nd = out_2nd["comp_rgb"]
+
+        guidance_out_2nd = self.guidance(
+            guidance_inp_2nd, 
+            self.prompt_utils, 
+            **batch, 
+            rgb_as_latents=self.cfg.rgb_as_latents,
+        )
+
+        loss_2nd = self._compute_loss(guidance_out_2nd, out_2nd, renderer="2nd", **batch)
+
+        return {
+            "loss": loss["loss"] + loss_2nd["loss"]
+        }
+
+    def _compute_loss(
+        self,
+        guidance_out: Dict[str, Any],
+        out: Dict[str, Any],
+        renderer: str = "1st",
+        **batch,
+    ):
+        
+        assert renderer in ["1st", "2nd"]
+
         loss = 0.0
         for name, value in guidance_out.items():
-            self.log(f"train/{name}", value)
-            if name.startswith("loss_"):
-                loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")])
+            if renderer == "1st":
+                self.log(f"train/{name}", value)
+                if name.startswith("loss_"):
+                    loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")])
+            else:
+                self.log(f"train/{name}_2nd", value)
+                if name.startswith("loss_"):
+                    loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_") + "_2nd"])
 
-        if "coarse" in self.cfg.stage: # i.e. coarse or coarse+geometry
-            if self.C(self.cfg.loss.lambda_orient) > 0:
-                if "normal" not in out:
-                    raise ValueError(
-                        "Normal is required for orientation loss, no normal is found in the output."
-                    )
-                loss_orient = (
-                    out["weights"].detach()
-                    * dot(out["normal"], out["t_dirs"]).clamp_min(0.0) ** 2
-                ).sum() / (out["opacity"] > 0).sum()
+        if (renderer == "1st" and self.C(self.cfg.loss.lambda_orient) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_orient_2nd) > 0):
+            if "normal" not in out:
+                raise ValueError(
+                    "Normal is required for orientation loss, no normal is found in the output."
+                )
+            loss_orient = (
+                out["weights"].detach()
+                * dot(out["normal"], out["t_dirs"]).clamp_min(0.0) ** 2
+            ).sum() / (out["opacity"] > 0).sum()
+            if renderer == "1st":
                 self.log("train/loss_orient", loss_orient)
                 loss += loss_orient * self.C(self.cfg.loss.lambda_orient)
+            else:
+                self.log("train/loss_orient_2nd", loss_orient)
+                loss += loss_orient * self.C(self.cfg.loss.lambda_orient_2nd)
 
-            if self.C(self.cfg.loss.lambda_sparsity) > 0:
-                loss_sparsity = (out["opacity"] ** 2 + 0.01).sqrt().mean()
+        if (renderer == "1st" and self.C(self.cfg.loss.lambda_sparsity) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_sparsity_2nd) > 0):
+            loss_sparsity = (out["opacity"] ** 2 + 0.01).sqrt().mean()
+            if renderer == "1st":
                 self.log("train/loss_sparsity", loss_sparsity)
                 loss += loss_sparsity * self.C(self.cfg.loss.lambda_sparsity)
+            else:
+                self.log("train/loss_sparsity_2nd", loss_sparsity)
+                loss += loss_sparsity * self.C(self.cfg.loss.lambda_sparsity_2nd)
 
-            if self.C(self.cfg.loss.lambda_opaque) > 0:
-                opacity_clamped = out["opacity"].clamp(1.0e-3, 1.0 - 1.0e-3)
-                loss_opaque = binary_cross_entropy(opacity_clamped, opacity_clamped)
+
+        if (renderer == "1st" and self.C(self.cfg.loss.lambda_opaque) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_opaque_2nd) > 0):
+            opacity_clamped = out["opacity"].clamp(1.0e-3, 1.0 - 1.0e-3)
+            loss_opaque = binary_cross_entropy(opacity_clamped, opacity_clamped)
+            if renderer == "1st":
                 self.log("train/loss_opaque", loss_opaque)
                 loss += loss_opaque * self.C(self.cfg.loss.lambda_opaque)
+            else:
+                self.log("train/loss_opaque_2nd", loss_opaque)
+                loss += loss_opaque * self.C(self.cfg.loss.lambda_opaque_2nd)
 
-            if self.C(self.cfg.loss.lambda_z_variance) > 0:
-                # z variance loss proposed in HiFA: http://arxiv.org/abs/2305.18766
-                # helps reduce floaters and produce solid geometry
-                if 'z_variance' not in out:
-                    raise ValueError(
-                        "z_variance is required for z_variance loss, no z_variance is found in the output."
-                    )
-                loss_z_variance = out["z_variance"][out["opacity"] > 0.5].mean()
+        if (renderer == "1st" and self.C(self.cfg.loss.lambda_z_variance) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_z_variance_2nd) > 0):
+            # z variance loss proposed in HiFA: http://arxiv.org/abs/2305.18766
+            # helps reduce floaters and produce solid geometry
+            if 'z_variance' not in out:
+                raise ValueError(
+                    "z_variance is required for z_variance loss, no z_variance is found in the output."
+                )
+            loss_z_variance = out["z_variance"][out["opacity"] > 0.5].mean()
+            if renderer == "1st":
                 self.log("train/loss_z_variance", loss_z_variance)
                 loss += loss_z_variance * self.C(self.cfg.loss.lambda_z_variance)
+            else:
+                self.log("train/loss_z_variance_2nd", loss_z_variance)
+                loss += loss_z_variance * self.C(self.cfg.loss.lambda_z_variance_2nd)
 
-            # sdf loss
-            if hasattr(self.cfg.loss, 'lambda_eikonal')  and self.C(self.cfg.loss.lambda_eikonal) > 0:
-                if 'sdf_grad' not in out:
-                    raise ValueError(
-                        "sdf is required for eikonal loss, no sdf is found in the output."
-                    )
-                loss_eikonal = (
-                    (torch.linalg.norm(out["sdf_grad"], ord=2, dim=-1) - 1.0) ** 2
-                ).mean()
+        # sdf loss
+        if (renderer == "1st" and self.C(self.cfg.loss.lambda_eikonal) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_eikonal_2nd) > 0):
+            if 'sdf_grad' not in out:
+                raise ValueError(
+                    "sdf is required for eikonal loss, no sdf is found in the output."
+                )
+            loss_eikonal = (
+                (torch.linalg.norm(out["sdf_grad"], ord=2, dim=-1) - 1.0) ** 2
+            ).mean()
+            
+            if renderer == "1st":
                 self.log("train/loss_eikonal", loss_eikonal)
                 loss += loss_eikonal * self.C(self.cfg.loss.lambda_eikonal)
-            
-            if "inv_std" in out:
-                self.log("train/inv_std", out["inv_std"], prog_bar=True)
+            else:
+                self.log("train/loss_eikonal_2nd", loss_eikonal)
+                loss += loss_eikonal * self.C(self.cfg.loss.lambda_eikonal_2nd)
+        
+        if "inv_std" in out:
+            self.log("train/inv_std", out["inv_std"], prog_bar=True)
 
-        else:
-            raise ValueError(f"Unknown stage {self.cfg.stage}") # TODO
-
-        # addition loss for geometry stage
-        if self.cfg.stage == "coarse+geometry":
-            # use the geometry_lr to control the contribution of geometry
-            guidance_inp = torch.nan_to_num(out["comp_normal"], nan=0.0, posinf=0.0, neginf=0.0)
-            guidance_out = self.guidance(
-                guidance_inp, 
-                self.prompt_utils, 
-                **batch, 
-                rgb_as_latents=False,
-            )
-            lambda_geo = 0.2 # hard-coded lambda
-            for name, value in guidance_out.items():
-                self.log(f"train/shape_{name}", value)
-                if name.startswith("loss_"):
-                    loss += lambda_geo * value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")])
-
-        # print("\n current device is:{}".format(loss.device))
         return {"loss": loss}
 
-    def validation_step(self, batch, batch_idx):
-        out = self(batch)
 
-        batch_size = out['comp_rgb'].shape[0]
+    def _save_image_grid(
+        self, 
+        batch,
+        batch_idx,
+        out,
+        phase="val",
+        render="1st",
+    ):
+        
+        assert phase in ["val", "test"]
 
         # save the image with the same name as the prompt
-        name = batch['prompt'][0].replace(',', '').replace('.', '').replace(' ', '_')
+        if "name" in batch:
+            name = batch['name'][0].replace(',', '').replace('.', '').replace(' ', '_')
+        else:
+            name = batch['prompt'][0].replace(',', '').replace('.', '').replace(' ', '_')
+        # specify the image name
+        image_name  = f"it{self.true_global_step}-{phase}-{render}/{name}/{str(batch['index'][batch_idx].item())}.png"
+        # specify the verbose name
+        verbose_name = f"{phase}_{render}_step"
 
-        for batch_idx in tqdm(range(batch_size), desc="Saving test images"):
-            # visualize the depth
-            if 'depth' in out:
-                render_depth = True
-                depth = out["depth"][batch_idx, :, :, 0]
-                depth = (depth - depth.min()) / (depth.max() - depth.min())
-            else:
-                render_depth = False
-                
-            self.save_image_grid(
-                f"it{self.true_global_step}-val/{name}/{str(batch['index'][batch_idx].item())}.png"
-                    if self.cfg.validation_via_video
-                    else f"it{self.true_global_step}/{name}/{str(batch['index'][batch_idx].item())}.png",
-                (
-                    [
-                        {
-                            "type": "rgb",
-                            "img": out["comp_rgb"][batch_idx] if not self.cfg.rgb_as_latents else out["decoded_rgb"][batch_idx],
-                            "kwargs": {"data_format": "HWC"},
-                        },
-                    ]
-                    if "comp_rgb" in out
-                    else []
-                )
-                + (
-                    [
-                        {
-                            "type": "rgb",
-                            "img": out["comp_normal"][batch_idx],
-                            "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
-                        }
-                    ]
-                    if "comp_normal" in out
-                    else []
-                )
-                + [
+        # normalize the depth
+        normalize = lambda x: (x - x.min()) / (x.max() - x.min())
+
+        self.save_image_grid(
+            image_name,
+            (
+                [
+                    {
+                        "type": "rgb",
+                        "img": out["comp_rgb"][batch_idx] if not self.cfg.rgb_as_latents else out["decoded_rgb"][batch_idx],
+                        "kwargs": {"data_format": "HWC"},
+                    },
+                ]
+                if "comp_rgb" in out
+                else []
+            )
+            + (
+                [
+                    {
+                        "type": "rgb",
+                        "img": out["comp_normal"][batch_idx],
+                        "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
+                    }
+                ]
+                if "comp_normal" in out
+                else []
+            )
+            + [
+                {
+                    "type": "grayscale",
+                    "img": out["opacity"][batch_idx, :, :, 0],
+                    "kwargs": {"cmap": None, "data_range": (0, 1)},
+                },
+            ]
+            + (
+                [
                     {
                         "type": "grayscale",
-                        "img": out["opacity"][batch_idx, :, :, 0],
+                        "img": normalize(out["depth"][batch_idx, :, :, 0]),
                         "kwargs": {"cmap": None, "data_range": (0, 1)},
                     },
                 ]
-                + (
-                    [
-                        {
-                            "type": "grayscale",
-                            "img": depth,
-                            "kwargs": {"cmap": None, "data_range": (0, 1)},
-                        },
-                    ]
-                    if render_depth
-                    else []
-                ),
+                if "depth" in out
+                else []
+            ),
+            name=verbose_name,
+            step=self.true_global_step,
+        )
 
-                name=f"validation_step_batchidx_{batch_idx}" 
-                    if self.cfg.validation_via_video
-                    else "validation_step",
-                step=self.true_global_step,
-            )
+    def validation_step(self, batch, batch_idx):
+        out, out_2nd  = self(batch)
 
+        batch_size = out['comp_rgb'].shape[0]
+
+        for batch_idx in tqdm(range(batch_size), desc="Saving val images"):
+            self._save_image_grid(batch, batch_idx, out, phase="val", render="1st")
+            self._save_image_grid(batch, batch_idx, out_2nd, phase="val", render="2nd")
+                
         if self.cfg.visualize_samples:
             raise NotImplementedError
 
+    def test_step(self, batch, batch_idx):
+        out, out_2nd = self(batch)
+
+        batch_size = out['comp_rgb'].shape[0]
+
+        for batch_idx in tqdm(range(batch_size), desc="Saving test images"):
+            self._save_image_grid(batch, batch_idx, out, phase="test", render="1st")
+            self._save_image_grid(batch, batch_idx, out_2nd, phase="test", render="2nd")
+
     def on_validation_epoch_end(self):
-        if self.cfg.validation_via_video:
-            filestem = f"it{self.true_global_step}-val"
-            if get_rank() == 0: # only remove from one process
+        filestems = [
+            f"it{self.true_global_step}-val-{render}"
+            for render in ["1st", "2nd"]
+        ]
+        if get_rank() == 0: # only remove from one process
+            for filestem in filestems:
                 for prompt in tqdm(
                     os.listdir(os.path.join(self.get_save_dir(), filestem)),
                     desc="Generating validation videos",
@@ -331,90 +398,28 @@ class MultipromptRadienceFieldGeneratorSystem(BaseLift3DSystem):
                         )
                     except:
                         threestudio.info('cannot save {} at step {}'.format(prompt, self.true_global_step))
-                    # shutil.rmtree(
-                    #     os.path.join(self.get_save_dir(), f"it{self.true_global_step}-val")
-                    # )
-
-
-    def test_step(self, batch, batch_idx):
-        out = self(batch)
-
-        batch_size = out['comp_rgb'].shape[0]
-
-        # save the image with the same name as the prompt
-        if "name" in batch:
-            name = batch['name'][0].replace(',', '').replace('.', '').replace(' ', '_')
-        else:
-            name = batch['prompt'][0].replace(',', '').replace('.', '').replace(' ', '_')
-
-        for batch_idx in tqdm(range(batch_size), desc="Saving test images"):
-            # visualize the depth
-            depth = out["depth"][batch_idx, :, :, 0]
-            depth = (depth - depth.min()) / (depth.max() - depth.min())
-
-            self.save_image_grid(
-                f"it{self.true_global_step}-test/{name}/{str(batch['index'][batch_idx].item())}.png",
-                (
-                    [
-                        {
-                            "type": "rgb",
-                            "img": out["comp_rgb"][batch_idx] if not self.cfg.rgb_as_latents else out["decoded_rgb"][batch_idx],
-                            "kwargs": {"data_format": "HWC"},
-                        },
-                    ]
-                    if "comp_rgb" in out
-                    else []
-                )
-                + (
-                    [
-                        {
-                            "type": "rgb",
-                            "img": out["comp_normal"][batch_idx],
-                            "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
-                        }
-                    ]
-                    if "comp_normal" in out
-                    else []
-                )
-                + [
-                    {
-                        "type": "grayscale",
-                        "img": out["opacity"][batch_idx, :, :, 0],
-                        "kwargs": {"cmap": None, "data_range": (0, 1)},
-                    },
-                ]
-                + (
-                    [
-                        {
-                            "type": "grayscale",
-                            "img": depth,
-                            "kwargs": {"cmap": None, "data_range": (0, 1)},
-                        },
-                    ]
-                    if 'depth' in out
-                    else []
-                ),
-                name="test_step",
-                step=self.true_global_step,
-            )
 
     def on_test_epoch_end(self):
-        filestem = f"it{self.true_global_step}-test"
+        filestems = [
+            f"it{self.true_global_step}-test-{render}"
+            for render in ["1st", "2nd"]
+        ]
         if get_rank() == 0: # only remove from one process
-            for prompt in tqdm(
-                os.listdir(os.path.join(self.get_save_dir(), filestem)),
-                desc="Generating validation videos",
-            ):
-                try:
-                    self.save_img_sequence(
-                        os.path.join(filestem, prompt),
-                        os.path.join(filestem, prompt),
-                        "(\d+)\.png",
-                        save_format="mp4",
-                        fps=30,
-                        name="test",
-                        step=self.true_global_step,
-                        multithreaded=True,
-                    )
-                except:
-                    threestudio.info('cannot save {} at step {}'.format(prompt, self.true_global_step))
+            for filestem in filestems:
+                for prompt in tqdm(
+                    os.listdir(os.path.join(self.get_save_dir(), filestem)),
+                    desc="Generating validation videos",
+                ):
+                    try:
+                        self.save_img_sequence(
+                            os.path.join(filestem, prompt),
+                            os.path.join(filestem, prompt),
+                            "(\d+)\.png",
+                            save_format="mp4",
+                            fps=30,
+                            name="test",
+                            step=self.true_global_step,
+                            multithreaded=True,
+                        )
+                    except:
+                        threestudio.info('cannot save {} at step {}'.format(prompt, self.true_global_step))
