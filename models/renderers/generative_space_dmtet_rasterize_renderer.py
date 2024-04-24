@@ -25,7 +25,7 @@ from threestudio.models.isosurface import MarchingTetrahedraHelper
 
 
 @threestudio.register("generative-space-dmtet-rasterize-renderer")
-class GenerativeSpaceVolSDFVolumeRenderer(NVDiffRasterizer):
+class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
     @dataclass
     class Config(NVDiffRasterizer.Config):
         # the following are from NeuS #########
@@ -121,6 +121,18 @@ class GenerativeSpaceVolSDFVolumeRenderer(NVDiffRasterizer):
             out.update({"comp_normal": gb_normal_aa})  # in [0, 1]
 
             if render_rgb:
+
+                # slice the space cache
+                if torch.is_tensor(space_cache): #space cache
+                    space_cache_slice = space_cache[batch_idx: batch_idx+1]
+                elif isinstance(space_cache, Dict): #hyper net
+                    # Dict[str, List[Float[Tensor, "B ..."]]]
+                    space_cache_slice = {}
+                    for key in space_cache.keys():
+                        space_cache_slice[key] = [
+                            weight[batch_idx: batch_idx+1] for weight in space_cache[key]
+                        ]
+
                 selector = mask[..., 0]
 
                 gb_pos, _ = self.ctx.interpolate_one(mesh.v_pos, rast, mesh.t_pos_idx)
@@ -140,7 +152,7 @@ class GenerativeSpaceVolSDFVolumeRenderer(NVDiffRasterizer):
                 positions = gb_pos[selector]
                 geo_out = self.geometry(
                     positions[None, ...],
-                    space_cache[batch_idx: batch_idx+1],
+                    space_cache_slice,
                     output_normal= False, #self.training, # only output normal and related info during training
                 )
 
@@ -196,6 +208,17 @@ class GenerativeSpaceVolSDFVolumeRenderer(NVDiffRasterizer):
         pass
 
     def isosurface(self, space_cache: Float[Tensor, "B ..."]) -> List[Mesh]:
+
+        # get the batchsize
+        if torch.is_tensor(space_cache): #space cache
+            batch_size = space_cache.shape[0]
+        elif isinstance(space_cache, Dict): #hyper net
+            # Dict[str, List[Float[Tensor, "B ..."]]]
+            for key in space_cache.keys():
+                batch_size = space_cache[key][0].shape[0]
+                break
+
+
         # scale the points to [-1, 1]
         points = scale_tensor(
             self.isosurface_helper.grid_vertices,
@@ -204,7 +227,7 @@ class GenerativeSpaceVolSDFVolumeRenderer(NVDiffRasterizer):
         )
         # get the sdf values    
         sdf_batch, deformation_batch = self.geometry.forward_field(
-            points[None, ...].expand(space_cache.shape[0], -1, -1),
+            points[None, ...].expand(batch_size, -1, -1),
             space_cache
         )
         # get the isosurface
@@ -213,7 +236,12 @@ class GenerativeSpaceVolSDFVolumeRenderer(NVDiffRasterizer):
         # for sdf, deformation in zip(sdf_batch, deformation_batch):
         for index in range(sdf_batch.shape[0]):
             sdf = sdf_batch[index]
-            deformation = deformation_batch[index]
+
+            # the deformation may be None
+            if deformation_batch is None:
+                deformation = None
+            else:
+                deformation = deformation_batch[index]
 
             # special case when all sdf values are positive or negative, thus no isosurface
             if torch.all(sdf > 0) or torch.all(sdf < 0):
@@ -240,9 +268,10 @@ class GenerativeSpaceVolSDFVolumeRenderer(NVDiffRasterizer):
 
                 # attempt 3
                 # set the sdf values to be the norm of the points
-                sdf_manually = points.norm(dim=-1, p=2, keepdim=True) - self.geometry.cfg
-                sdf = sdf * 0.001 + sdf_manually * 0.999 # allow limited effect of original sdf
-                deformation = deformation * 0.001 + torch.randn_like(deformation) * 0.999 # allow limited effect of original deformation
+                ratio_factor = 1.0
+                sdf_manually = self.geometry.get_shifted_sdf(points, torch.zeros_like(sdf))
+                sdf = sdf * (1 - ratio_factor) + sdf_manually * ratio_factor # allow limited effect of original sdf
+                deformation = deformation * (1 - ratio_factor) + torch.zeros_like(deformation) * ratio_factor # allow limited effect of original deformation
 
             mesh = self.isosurface_helper(sdf, deformation)
             mesh.v_pos = scale_tensor(
