@@ -243,11 +243,6 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             else:
                 deformation = deformation_batch[index]
 
-            # Fix some sdf if we observe empty shape (full positive or full negative)
-            # adopted from InstantMesh
-            grid_res = self.cfg.isosurface_resolution
-            sdf_bxnxnxn = sdf.reshape((grid_res, grid_res, grid_res))
-
             # special case when all sdf values are positive or negative, thus no isosurface
             if torch.all(sdf > 0) or torch.all(sdf < 0):
                 threestudio.info("All sdf values are positive or negative, no isosurface")
