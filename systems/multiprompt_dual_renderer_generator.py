@@ -14,6 +14,7 @@ from functools import partial
 
 from tqdm import tqdm
 from threestudio.utils.misc import barrier
+from threestudio.models.mesh import Mesh
 
 @threestudio.register("multiprompt-dual-renderer-generator-system")
 class MultipromptDualRendererGeneratorSystem(BaseLift3DSystem):
@@ -276,7 +277,50 @@ class MultipromptDualRendererGeneratorSystem(BaseLift3DSystem):
             else:
                 self.log("train/loss_eikonal_2nd", loss_eikonal)
                 loss += loss_eikonal * self.C(self.cfg.loss.lambda_eikonal_2nd)
+
+        # normal consistency loss
+        if (renderer == "1st" and self.C(self.cfg.loss.lambda_normal_consistency) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_normal_consistency_2nd) > 0):
+            if 'mesh' in out:
+                if not isinstance(out["mesh"], list):
+                    out["mesh"] = [out["mesh"]]
+                loss_normal_consistency = 0.0
+                for mesh in out["mesh"]:
+                    assert isinstance(mesh, Mesh), "mesh should be an instance of Mesh"
+                    loss_normal_consistency += mesh.normal_consistency()
+            else:
+                raise ValueError(
+                    "mesh is required for normal consistency loss, no mesh is found in the output."
+                )
+
+            if renderer == "1st":
+                self.log("train/loss_normal_consistency", loss_normal_consistency)
+                loss += loss_normal_consistency * self.C(self.cfg.loss.lambda_normal_consistency)
+            else:
+                self.log("train/loss_normal_consistency_2nd", loss_normal_consistency)
+                loss += loss_normal_consistency * self.C(self.cfg.loss.lambda_normal_consistency_2nd)
         
+        # laplacian loss
+        if (renderer == "1st" and self.C(self.cfg.loss.lambda_laplacian_smoothness) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_laplacian_smoothness_2nd) > 0):
+            if 'mesh' in out:
+                if not isinstance(out["mesh"], list):
+                    out["mesh"] = [out["mesh"]]
+                loss_laplacian = 0.0
+                for mesh in out["mesh"]:
+                    assert isinstance(mesh, Mesh), "mesh should be an instance of Mesh"
+                    loss_laplacian += mesh.laplacian()
+
+            else:
+                raise ValueError(
+                    "mesh is required for laplacian loss, no mesh is found in the output."
+                )
+            
+            if renderer == "1st":
+                self.log("train/loss_laplacian_smoothness", loss_laplacian)
+                loss += loss_laplacian * self.C(self.cfg.loss.lambda_laplacian_smoothness)
+            else:
+                self.log("train/loss_laplacian_smoothness_2nd", loss_laplacian)
+                loss += loss_laplacian * self.C(self.cfg.loss.lambda_laplacian_smoothness_2nd)
+            
         if "inv_std" in out:
             self.log("train/inv_std", out["inv_std"], prog_bar=True)
 
