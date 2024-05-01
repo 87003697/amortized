@@ -321,6 +321,20 @@ class MultipromptDualRendererGeneratorSystem(BaseLift3DSystem):
                 self.log("train/loss_laplacian_smoothness_2nd", loss_laplacian)
                 loss += loss_laplacian * self.C(self.cfg.loss.lambda_laplacian_smoothness_2nd)
             
+        # lambda_normal_smoothness_2d
+        if (renderer == "1st" and self.C(self.cfg.loss.lambda_normal_smoothness_2d) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_normal_smoothness_2d_2nd) > 0):
+            normal = out["comp_normal"]
+            loss_normal_smoothness_2d = (
+                (normal[:, 1:, :, :] - normal[:, :-1, :, :]).square().mean() +
+                (normal[:, :, 1:, :] - normal[:, :, :-1, :]).square().mean()
+            )
+            if renderer == "1st":
+                self.log("train/loss_normal_smoothness_2d", loss_normal_smoothness_2d)
+                loss += loss_normal_smoothness_2d * self.C(self.cfg.loss.lambda_normal_smoothness_2d)
+            else:
+                self.log("train/loss_normal_smoothness_2d_2nd", loss_normal_smoothness_2d)
+                loss += loss_normal_smoothness_2d * self.C(self.cfg.loss.lambda_normal_smoothness_2d_2nd)
+
         if "inv_std" in out:
             self.log("train/inv_std", out["inv_std"], prog_bar=True)
 
