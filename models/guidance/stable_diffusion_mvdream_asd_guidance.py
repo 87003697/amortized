@@ -256,7 +256,9 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         # prepare text embeddings
         if not self.sd_use_perp_neg:
             text_embeddings = prompt_utils.get_text_embeddings(
-                elevation, azimuth, camera_distances, view_dependent_prompting=self.cfg.sd_view_dependent_prompting
+                elevation, azimuth, camera_distances, 
+                view_dependent_prompting=self.cfg.sd_view_dependent_prompting,
+                use_2nd_uncond = False
             )
             text_batch_size = text_embeddings.shape[0] // 2
             
@@ -447,7 +449,9 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
         # prepare text embeddings
         text_embeddings = prompt_utils.get_text_embeddings(
-            elevation, azimuth, camera_distances, view_dependent_prompting=self.cfg.mv_view_dependent_prompting
+            elevation, azimuth, camera_distances, 
+            view_dependent_prompting=self.cfg.mv_view_dependent_prompting,
+            use_2nd_uncond = True
         )
         text_batch_size = text_embeddings.shape[0] // 2
         
