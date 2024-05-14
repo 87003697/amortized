@@ -75,6 +75,9 @@ class MultiPromptProcessor(BaseObject):
         # prompt_debiasing_mask_ids: Optional[List[int]] = None
         use_local_text_embeddings: bool = False
 
+        # whether to split the text embeddings across GPUs
+        gpu_split: bool = True
+
     cfg: Config
 
 
@@ -177,8 +180,11 @@ class MultiPromptProcessor(BaseObject):
                 prompt_library_json = json.load(f)
                 all_prompts = []
                 for split in prompt_library_json:
-                    # each process only has a subset of the prompt library!
-                    all_prompts += prompt_library_json[split][rank::num_gpus]
+                    if self.cfg.gpu_split:
+                        # each process only has a subset of the prompt library!
+                        all_prompts += prompt_library_json[split][rank::num_gpus]
+                    else:
+                        all_prompts += prompt_library_json[split]
 
             self.prompt_library = []
             # # remove duplicates
