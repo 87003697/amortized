@@ -39,6 +39,9 @@ class MultipromptDualRendererGeneratorSystem(BaseLift3DSystem):
         renderer_2nd_type: str = ""
         renderer_2nd: dict = field(default_factory=dict)
 
+        # parallelly compute the guidance
+        parallel_guidance: bool = False
+
     cfg: Config
 
     def configure(self) -> None:
@@ -161,28 +164,38 @@ class MultipromptDualRendererGeneratorSystem(BaseLift3DSystem):
         else:
             guidance_inp = out["comp_rgb"]
 
-        guidance_out = self.guidance(
-            guidance_inp, 
-            self.prompt_utils, 
-            **batch, 
-            rgb_as_latents=self.cfg.rgb_as_latents,
-        )
-
-        loss = self._compute_loss(guidance_out, out, renderer="1st", **batch)
-
         # guidance for the second renderer
         if self.cfg.stage == "geometry":
             guidance_inp_2nd = out_2nd["comp_normal"]
         else:
             guidance_inp_2nd = out_2nd["comp_rgb"]
 
-        guidance_out_2nd = self.guidance(
-            guidance_inp_2nd, 
-            self.prompt_utils, 
-            **batch, 
-            rgb_as_latents=self.cfg.rgb_as_latents,
-        )
+        if not self.cfg.parallel_guidance:
+            # the guidance is computed in two steps
+            guidance_out = self.guidance(
+                guidance_inp, 
+                self.prompt_utils, 
+                **batch, 
+                rgb_as_latents=self.cfg.rgb_as_latents,
+            )
 
+            guidance_out_2nd = self.guidance(
+                guidance_inp_2nd, 
+                self.prompt_utils, 
+                **batch, 
+                rgb_as_latents=self.cfg.rgb_as_latents,
+            )
+        else:
+            # the guidance is computed in parallel
+            guidance_out, guidance_out_2nd = self.guidance(
+                guidance_inp,
+                self.prompt_utils,
+                **batch,
+                rgb_as_latents=self.cfg.rgb_as_latents,
+                rgb_2nd = guidance_inp_2nd,
+            )
+
+        loss = self._compute_loss(guidance_out, out, renderer="1st", **batch)
         loss_2nd = self._compute_loss(guidance_out_2nd, out_2nd, renderer="2nd", **batch)
 
         return {

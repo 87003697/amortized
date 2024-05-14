@@ -213,7 +213,6 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 rgb_BCHW_2nd_resize = F.interpolate(
                     rgb_BCHW_2nd, size=(size, size), mode="bilinear", align_corners=False
                 )
-                import pdb; pdb.set_trace()
                 # concatenate the two images
                 rgb_BCHW_resize = torch.cat([rgb_BCHW_resize, rgb_BCHW_2nd_resize], dim=0)
             # encode image into latents
@@ -272,9 +271,9 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
             text_embeddings = torch.cat(
                 [
-                    text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1),
-                    text_embeddings_uncond if not is_dual else text_embeddings_uncond.repeat(2, 1),
-                    text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1),
+                    text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1),
+                    text_embeddings_uncond if not is_dual else text_embeddings_uncond.repeat(2, 1, 1),
+                    text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1),
                 ], 
                 dim=0
             )
@@ -360,10 +359,25 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         # reparameterization trick
         # d(loss)/d(latents) = latents - target = latents - (latents - grad) = grad
         target = (sd_latents - grad).detach()
-        loss_asd = 0.5 * F.mse_loss(sd_latents, target, reduction="sum") / batch_size if not is_dual else 2 * batch_size
-
-        return loss_asd, grad.norm()
-
+        if not is_dual:
+            loss_asd = 0.5 * F.mse_loss(sd_latents, target, reduction="sum") / batch_size
+            return loss_asd, grad.norm()
+        else:
+            # split the grad into two parts
+            loss_asd = torch.stack(
+                [
+                    0.5 * F.mse_loss(sd_latents[:batch_size], target[:batch_size], reduction="sum") / batch_size,
+                    0.5 * F.mse_loss(sd_latents[batch_size:], target[batch_size:], reduction="sum") / batch_size,
+                ]
+            )
+            grad_norm = torch.stack(
+                [
+                    grad[:batch_size].norm(),
+                    grad[batch_size:].norm(),
+                ]
+            )
+            return loss_asd, grad_norm
+            
 
 ################################################################################################
 # the following is specific to Stable Diffusion
@@ -404,7 +418,6 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 rgb_BCHW_2nd_resize = F.interpolate(
                     rgb_BCHW_2nd, size=(size, size), mode="bilinear", align_corners=False
                 )
-                import pdb; pdb.set_trace()
                 # concatenate the two images
                 rgb_BCHW_resize = torch.cat([rgb_BCHW_resize, rgb_BCHW_2nd_resize], dim=0)
             # encode image into latents
@@ -510,9 +523,9 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         """
         text_embeddings = torch.cat(
             [
-                text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1),
-                text_embeddings_uncond if not is_dual else text_embeddings_uncond.repeat(2, 1),
-                text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1),
+                text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1),
+                text_embeddings_uncond if not is_dual else text_embeddings_uncond.repeat(2, 1, 1),
+                text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1),
             ], 
             dim=0
         )
@@ -608,9 +621,26 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         # reparameterization trick
         # d(loss)/d(latents) = latents - target = latents - (latents - grad) = grad
         target = (mv_latents - grad).detach()
-        loss_asd = 0.5 * F.mse_loss(mv_latents, target, reduction="sum") / (batch_size if not is_dual else 2 * batch_size)
 
-        return loss_asd, grad.norm()
+        if not is_dual:
+            loss_asd = 0.5 * F.mse_loss(mv_latents, target, reduction="sum") / batch_size 
+            return loss_asd, grad.norm()
+        else:
+            # split the loss and grad_norm for the 1st and 2nd renderings
+            loss_asd = torch.stack(
+                [
+                    0.5 * F.mse_loss(mv_latents[:batch_size], target[:batch_size], reduction="sum") / batch_size,
+                    0.5 * F.mse_loss(mv_latents[batch_size:], target[batch_size:], reduction="sum") / batch_size,
+                ]
+            )
+            grad_norm = torch.stack(
+                [
+                    grad[:batch_size].norm(),
+                    grad[batch_size:].norm(),
+                ]
+            )
+            return loss_asd, grad_norm
+
 
 
 ################################################################################################
@@ -646,6 +676,8 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 render_2nd, prompt_2, view_4,
             ]
         """
+        # determine if dual rendering is enabled
+        is_dual = True if rgb_2nd is not None else False
 
         ################################################################################################
         # the following is specific to MVDream
@@ -663,8 +695,14 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 **kwargs,
             )
         else:
-            loss_mv = torch.tensor(0.0, device=self.device)
-            grad_mv = torch.tensor(0.0, device=self.device)
+            loss_mv = torch.tensor(
+                0.0 if not is_dual else [0.0, 0.0],
+                device=self.device
+            )
+            grad_mv = torch.tensor(
+                0.0 if not is_dual else [0.0, 0.0],
+                device=self.device
+            )
     
         ################################################################################################
         # due to the computation cost
@@ -687,15 +725,38 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 **kwargs,
             )
         else:
-            loss_sd = torch.tensor(0.0, device=self.device)
-            grad_sd = torch.tensor(0.0, device=self.device)
+            loss_sd = torch.tensor(
+                0.0 if not is_dual else [0.0, 0.0],
+                device=self.device
+            )
+            grad_sd = torch.tensor(
+                0.0 if not is_dual else [0.0, 0.0],
+                device=self.device
+            )
 
-        return {
-            "loss_asd": self.cfg.sd_weight * loss_sd + self.cfg.mv_weight * loss_mv,
-            "grad_norm_asd": self.cfg.sd_weight * grad_sd + self.cfg.mv_weight * grad_mv,
-            "min_step": self.min_step,
-            "max_step": self.max_step,
-        }
+        # return the loss and grad_norm
+        if not is_dual:
+            return {
+                "loss_asd": self.cfg.sd_weight * loss_sd + self.cfg.mv_weight * loss_mv,
+                "grad_norm_asd": self.cfg.sd_weight * grad_sd + self.cfg.mv_weight * grad_mv,
+                "min_step": self.min_step,
+                "max_step": self.max_step,
+            }
+        else:
+            # return the loss and grad_norm for the 1st and 2nd renderings
+            guidance_1st =  {
+                "loss_asd": self.cfg.sd_weight * loss_sd[0] + self.cfg.mv_weight * loss_mv[0],
+                "grad_norm_asd": self.cfg.sd_weight * grad_sd[0] + self.cfg.mv_weight * grad_mv[0],
+                "min_step": self.min_step,
+                "max_step": self.max_step,
+            }
+            guidance_2nd =  {
+                "loss_asd": self.cfg.sd_weight * loss_sd[1] + self.cfg.mv_weight * loss_mv[1],
+                "grad_norm_asd": self.cfg.sd_weight * grad_sd[1] + self.cfg.mv_weight * grad_mv[1],
+                "min_step": self.min_step,
+                "max_step": self.max_step,
+            }
+            return guidance_1st, guidance_2nd
 
 
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
