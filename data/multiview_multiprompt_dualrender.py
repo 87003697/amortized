@@ -263,7 +263,7 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
         focal_length: Float[Tensor, "B"] = 0.5 * self.ray_height / torch.tan(0.5 * fovy)
         directions: Float[Tensor, "B H W 3"] = self.directions_unit_focal[
             None, :, :, :
-        ].repeat(self.cfg.eval_batch_size, 1, 1, 1)
+        ].repeat(n_views, 1, 1, 1)
         directions[:, :, :, :2] = (
             directions[:, :, :, :2] / focal_length[:, None, None, None]
         )
@@ -277,6 +277,7 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
         mvp_mtx: Float[Tensor, "B 4 4"] = get_mvp_matrix(c2w, proj_mtx)
 
         return {
+            "index": torch.arange(n_views),
             "rays_o": rays_o,
             "rays_d": rays_d,
             "mvp_mtx": mvp_mtx,

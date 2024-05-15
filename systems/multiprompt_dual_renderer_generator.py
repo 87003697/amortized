@@ -42,6 +42,9 @@ class MultipromptDualRendererGeneratorSystem(BaseLift3DSystem):
         # parallelly compute the guidance
         parallel_guidance: bool = False
 
+        # if the prompt processor should be loaded in this system
+        load_prompt_processor: bool = True
+
     cfg: Config
 
     def configure(self) -> None:
@@ -88,8 +91,8 @@ class MultipromptDualRendererGeneratorSystem(BaseLift3DSystem):
     def on_predict_start(self) -> None:
         super().on_predict_start()
 
-        # initialize the prompt processor after dist init
-        if not hasattr(self, "prompt_processor"):
+        # initialize the prompt processor after dist init, if it is allowed to load
+        if not hasattr(self, "prompt_processor") and self.cfg.load_prompt_processor:
             self.prompt_processor = threestudio.find(self.cfg.prompt_processor_type)(
                 self.cfg.prompt_processor
             )
@@ -98,15 +101,15 @@ class MultipromptDualRendererGeneratorSystem(BaseLift3DSystem):
     def on_test_start(self) -> None:
         super().on_test_start()
 
-        # initialize the prompt processor after dist init
-        if not hasattr(self, "prompt_processor"):
+        # initialize the prompt processor after dist init, if it is allowed to load
+        if not hasattr(self, "prompt_processor") and self.cfg.load_prompt_processor:
             self.prompt_processor = threestudio.find(self.cfg.prompt_processor_type)(
                 self.cfg.prompt_processor
             )
 
     def forward(self, batch: Dict[str, Any]) -> Dict[str, Any]:
+        
         self.prompt_utils = self.prompt_processor(prompt = batch["prompt"])
-
         if "prompt_target" in batch:
             # for the case of interpolation
             self.prompt_utils_target = self.prompt_processor(prompt = batch["prompt_target"])

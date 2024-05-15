@@ -35,7 +35,7 @@ class MultipromptRandomCameraDataModuleConfig:
     fovy_range: Tuple[float, float] = (
         40,
         70,
-    )  # in degrees, in vertical direction (along height)
+    )
     camera_perturb: float = 0.1
     center_perturb: float = 0.2
     up_perturb: float = 0.02
