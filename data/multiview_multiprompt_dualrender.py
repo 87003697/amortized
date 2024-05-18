@@ -358,7 +358,7 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
         # default scene center at origin
         center: Float[Tensor, "B 3"] = torch.zeros_like(camera_positions)
         # default camera up direction as +z
-        up: Float[Tensor, "B 3"] = torch.as_tensor([0, 1, 0], dtype=torch.float32)[
+        up: Float[Tensor, "B 3"] = torch.as_tensor([0, 0, 1], dtype=torch.float32)[
             None, :
         ].repeat(self.batch_size, 1)
 
