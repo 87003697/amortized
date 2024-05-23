@@ -1,4 +1,5 @@
 from . import (
     triplane_transformer,
-    hypernetwork
+    hypernetwork,
+    one_step_triplane_stable_diffusion
 )

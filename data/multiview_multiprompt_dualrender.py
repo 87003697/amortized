@@ -291,7 +291,7 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
             "width": self.width,
             "fovy": fovy_deg,
             "prompt": prompts,
-            "noise": None # TODO
+            "noise": torch.randn(1, *self.cfg.dim_gaussian)
         }
     
     def _train_collate(self, batch) -> Dict[str, Any]:
@@ -411,7 +411,7 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
             "width": self.width,
             "fovy": fovy_deg,
             "prompt": prompts,
-            "noise": None # TODO
+            "noise": torch.randn(real_batch_size, *self.cfg.dim_gaussian)
         }
 
 

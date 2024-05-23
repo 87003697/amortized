@@ -21,7 +21,6 @@ from threestudio.utils.typing import *
 from threestudio.models.mesh import Mesh
 
 from threestudio.utils.ops import scale_tensor as scale_tensor
-from threestudio.models.isosurface import MarchingTetrahedraHelper
 
 
 @threestudio.register("generative-space-dmtet-rasterize-renderer")
@@ -36,6 +35,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         isosurface_outlier_n_faces_threshold: Union[int, float] = 0.01
 
         context_type: str = "cuda"
+        isosurface_method: str = "mt" # "mt" or "mc-cpu"
 
     cfg: Config
 
@@ -50,10 +50,19 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         # overwrite the geometry
         self.geometry.isosurface = self.isosurface
 
-        self.isosurface_helper = MarchingTetrahedraHelper(
-            self.cfg.isosurface_resolution,
-            f"load/tets/{self.cfg.isosurface_resolution}_tets.npz",
-        )
+        assert self.cfg.isosurface_method in ["mt", "mc-cpu"]
+        if self.cfg.isosurface_method == "mt":
+            from threestudio.models.isosurface import MarchingTetrahedraHelper
+            self.isosurface_helper = MarchingTetrahedraHelper(
+                self.cfg.isosurface_resolution,
+                f"load/tets/{self.cfg.isosurface_resolution}_tets.npz",
+            )
+        elif self.cfg.isosurface_method == "mc-cpu":
+            from threestudio.models.isosurface import  MarchingCubeCPUHelper
+            self.isosurface_helper = MarchingCubeCPUHelper(
+                self.cfg.isosurface_resolution,
+            )
+
 
     def forward(
         self,
@@ -220,7 +229,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
 
         # scale the points to [-1, 1]
         points = scale_tensor(
-            self.isosurface_helper.grid_vertices,
+            self.isosurface_helper.grid_vertices.to(self.device),
             self.isosurface_helper.points_range,
             [-1, 1], # hard coded isosurface_bbox
         )
