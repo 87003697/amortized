@@ -75,13 +75,16 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
         if attn.group_norm is not None:
             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
 
+        
         query = attn.to_q(hidden_states)
+        _query_new = torch.zeros_like(query)
         # lora for 1st plane
-        query[0::3] = query[0::3] + scale * self.to_q_xy_lora(hidden_states[0::3])
+        _query_new[0::3] = query[0::3] + scale * self.to_q_xy_lora(hidden_states[0::3])
         # lora for 2nd plane
-        query[1::3] = query[1::3] + scale * self.to_q_xz_lora(hidden_states[1::3])
+        _query_new[1::3] = query[1::3] + scale * self.to_q_xz_lora(hidden_states[1::3])
         # lora for 3rd plane
-        query[2::3] = query[2::3] + scale * self.to_q_yz_lora(hidden_states[2::3])
+        _query_new[2::3] = query[2::3] + scale * self.to_q_yz_lora(hidden_states[2::3])
+        query = _query_new
 
         query = attn.head_to_batch_dim(query)
 
@@ -91,20 +94,24 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
 
         key = attn.to_k(encoder_hidden_states)
+        _key_new = torch.zeros_like(key)
         # lora for 1st plane
-        key[0::3] = key[0::3] + scale * self.to_k_xy_lora(encoder_hidden_states[0::3])
+        _key_new[0::3] = key[0::3] + scale * self.to_k_xy_lora(encoder_hidden_states[0::3])
         # lora for 2nd plane
-        key[1::3] = key[1::3] + scale * self.to_k_xz_lora(encoder_hidden_states[1::3])
+        _key_new[1::3] = key[1::3] + scale * self.to_k_xz_lora(encoder_hidden_states[1::3])
         # lora for 3rd plane
-        key[2::3] = key[2::3] + scale * self.to_k_yz_lora(encoder_hidden_states[2::3])
+        _key_new[2::3] = key[2::3] + scale * self.to_k_yz_lora(encoder_hidden_states[2::3])
+        key = _key_new
 
         value = attn.to_v(encoder_hidden_states)
+        _value_new = torch.zeros_like(value)
         # lora for 1st plane
-        value[0::3] = value[0::3] + scale * self.to_v_xy_lora(encoder_hidden_states[0::3])
+        _value_new[0::3] = value[0::3] + scale * self.to_v_xy_lora(encoder_hidden_states[0::3])
         # lora for 2nd plane
-        value[1::3] = value[1::3] + scale * self.to_v_xz_lora(encoder_hidden_states[1::3])
+        _value_new[1::3] = value[1::3] + scale * self.to_v_xz_lora(encoder_hidden_states[1::3])
         # lora for 3rd plane
-        value[2::3] = value[2::3] + scale * self.to_v_yz_lora(encoder_hidden_states[2::3])
+        _value_new[2::3] = value[2::3] + scale * self.to_v_yz_lora(encoder_hidden_states[2::3])
+        value = _value_new
 
         # in self-attention, query of each plane should be used to calculate the attention scores of all planes
         key = attn.head_to_batch_dim(
@@ -132,12 +139,14 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
 
         # linear proj
         hidden_states = attn.to_out[0](hidden_states)
+        _hidden_states_new = torch.zeros_like(hidden_states)
         # lora for 1st plane
-        hidden_states[0::3] = hidden_states[0::3] + scale * self.to_out_xy_lora(hidden_states[0::3])
+        _hidden_states_new[0::3] = hidden_states[0::3] + scale * self.to_out_xy_lora(hidden_states[0::3])
         # lora for 2nd plane
-        hidden_states[1::3] = hidden_states[1::3] + scale * self.to_out_xz_lora(hidden_states[1::3])
+        _hidden_states_new[1::3] = hidden_states[1::3] + scale * self.to_out_xz_lora(hidden_states[1::3])
         # lora for 3rd plane
-        hidden_states[2::3] = hidden_states[2::3] + scale * self.to_out_yz_lora(hidden_states[2::3])
+        _hidden_states_new[2::3] = hidden_states[2::3] + scale * self.to_out_yz_lora(hidden_states[2::3])
+        hidden_states = _hidden_states_new
 
         # dropout
         hidden_states = attn.to_out[1](hidden_states)
@@ -216,12 +225,15 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
 
         query = attn.to_q(hidden_states)
+        _query_new = torch.zeros_like(query)        
         # lora for 1st plane
-        query[0::3] = query[0::3] + scale * self.to_q_xy_lora(hidden_states[0::3])
+        _query_new[0::3] = query[0::3] + scale * self.to_q_xy_lora(hidden_states[0::3])
         # lora for 2nd plane
-        query[1::3] = query[1::3] + scale * self.to_q_xz_lora(hidden_states[1::3])
+        _query_new[1::3] = query[1::3] + scale * self.to_q_xz_lora(hidden_states[1::3])
         # lora for 3rd plane
-        query[2::3] = query[2::3] + scale * self.to_q_yz_lora(hidden_states[2::3])
+        _query_new[2::3] = query[2::3] + scale * self.to_q_yz_lora(hidden_states[2::3])
+        query = _query_new
+
         query = attn.head_to_batch_dim(query)
 
         if encoder_hidden_states is None:
@@ -230,20 +242,24 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
 
         key = attn.to_k(encoder_hidden_states)
+        _key_new = torch.zeros_like(key)
         # lora for 1st plane
-        key[0::3] = key[0::3] + scale * self.to_k_xy_lora(encoder_hidden_states[0::3])
+        _key_new[0::3] = key[0::3] + scale * self.to_k_xy_lora(encoder_hidden_states[0::3])
         # lora for 2nd plane
-        key[1::3] = key[1::3] + scale * self.to_k_xz_lora(encoder_hidden_states[1::3])
+        _key_new[1::3] = key[1::3] + scale * self.to_k_xz_lora(encoder_hidden_states[1::3])
         # lora for 3rd plane
-        key[2::3] = key[2::3] + scale * self.to_k_yz_lora(encoder_hidden_states[2::3])
+        _key_new[2::3] = key[2::3] + scale * self.to_k_yz_lora(encoder_hidden_states[2::3])
+        key = _key_new
 
         value = attn.to_v(encoder_hidden_states)
+        _value_new = torch.zeros_like(value)
         # lora for 1st plane
-        value[0::3] = value[0::3] + scale * self.to_v_xy_lora(encoder_hidden_states[0::3])
+        _value_new[0::3] = value[0::3] + scale * self.to_v_xy_lora(encoder_hidden_states[0::3])
         # lora for 2nd plane
-        value[1::3] = value[1::3] + scale * self.to_v_xz_lora(encoder_hidden_states[1::3])
+        _value_new[1::3] = value[1::3] + scale * self.to_v_xz_lora(encoder_hidden_states[1::3])
         # lora for 3rd plane
-        value[2::3] = value[2::3] + scale * self.to_v_yz_lora(encoder_hidden_states[2::3])
+        _value_new[2::3] = value[2::3] + scale * self.to_v_yz_lora(encoder_hidden_states[2::3])
+        value = _value_new
 
         key = attn.head_to_batch_dim(key)
         value = attn.head_to_batch_dim(value)
@@ -254,12 +270,14 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
 
         # linear proj
         hidden_states = attn.to_out[0](hidden_states)
+        _hidden_states_new = torch.zeros_like(hidden_states)
         # lora for 1st plane
-        hidden_states[0::3] = hidden_states[0::3] + scale * self.to_out_xy_lora(hidden_states[0::3])
+        _hidden_states_new[0::3] = hidden_states[0::3] + scale * self.to_out_xy_lora(hidden_states[0::3])
         # lora for 2nd plane
-        hidden_states[1::3] = hidden_states[1::3] + scale * self.to_out_xz_lora(hidden_states[1::3])
+        _hidden_states_new[1::3] = hidden_states[1::3] + scale * self.to_out_xz_lora(hidden_states[1::3])
         # lora for 3rd plane
-        hidden_states[2::3] = hidden_states[2::3] + scale * self.to_out_yz_lora(hidden_states[2::3])
+        _hidden_states_new[2::3] = hidden_states[2::3] + scale * self.to_out_yz_lora(hidden_states[2::3])
+        hidden_states = _hidden_states_new
 
         # dropout
         hidden_states = attn.to_out[1](hidden_states)

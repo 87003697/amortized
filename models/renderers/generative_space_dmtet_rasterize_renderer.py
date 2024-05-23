@@ -116,6 +116,8 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 depth = torch.cat(depth_list, dim=0)
 
             mask = rast[..., 3:] > 0
+         
+
             mask_aa = self.ctx.antialias(mask.float(), rast, v_pos_clip, mesh.t_pos_idx)
             out = {"opacity": mask_aa, "mesh": mesh, "depth": depth}
 
@@ -159,6 +161,12 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 )
 
                 positions = gb_pos[selector]
+
+                # # special case when no points are selected
+                # if positions.shape[0] == 0:                
+                #     out.update({"comp_rgb": gb_rgb_aa, "comp_rgb_bg": gb_rgb_bg})
+                #     continue
+
                 geo_out = self.geometry(
                     positions[None, ...],
                     space_cache_slice,
