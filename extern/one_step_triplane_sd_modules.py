@@ -17,6 +17,71 @@ from dataclasses import dataclass
 
 from diffusers.models.lora import LoRACompatibleConv
 
+
+class LoRALinearLayerwBias(nn.Module):
+    r"""
+    A linear layer that is used with LoRA, can be used with bias.
+
+    Parameters:
+        in_features (`int`):
+            Number of input features.
+        out_features (`int`):
+            Number of output features.
+        rank (`int`, `optional`, defaults to 4):
+            The rank of the LoRA layer.
+        network_alpha (`float`, `optional`, defaults to `None`):
+            The value of the network alpha used for stable learning and preventing underflow. This value has the same
+            meaning as the `--network_alpha` option in the kohya-ss trainer script. See
+            https://github.com/darkstorm2150/sd-scripts/blob/main/docs/train_network_README-en.md#execute-learning
+        device (`torch.device`, `optional`, defaults to `None`):
+            The device to use for the layer's weights.
+        dtype (`torch.dtype`, `optional`, defaults to `None`):
+            The dtype to use for the layer's weights.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        rank: int = 4,
+        network_alpha: Optional[float] = None,
+        device: Optional[Union[torch.device, str]] = None,
+        dtype: Optional[torch.dtype] = None,
+        with_bias: bool = False
+    ):
+        super().__init__()
+
+        self.down = nn.Linear(in_features, rank, bias=False, device=device, dtype=dtype)
+        self.up = nn.Linear(rank, out_features, bias=False, device=device, dtype=dtype)
+        if with_bias:
+            self.bias = nn.Parameter(torch.zeros([1, 1, out_features], device=device, dtype=dtype))
+        self.with_bias = with_bias
+
+        # This value has the same meaning as the `--network_alpha` option in the kohya-ss trainer script.
+        # See https://github.com/darkstorm2150/sd-scripts/blob/main/docs/train_network_README-en.md#execute-learning
+        self.network_alpha = network_alpha
+        self.rank = rank
+        self.out_features = out_features
+        self.in_features = in_features
+
+        nn.init.normal_(self.down.weight, std=1 / rank)
+        nn.init.zeros_(self.up.weight)
+
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        orig_dtype = hidden_states.dtype
+        dtype = self.down.weight.dtype
+
+        down_hidden_states = self.down(hidden_states.to(dtype))
+        up_hidden_states = self.up(down_hidden_states)
+        if self.with_bias:
+            up_hidden_states = up_hidden_states + self.bias
+
+        if self.network_alpha is not None:
+            up_hidden_states *= self.network_alpha / self.rank
+
+        return up_hidden_states.to(orig_dtype)
+    
 class TriplaneLoRAConv2dLayer(nn.Module):
     r"""
     A convolutional layer that is used with LoRA.
@@ -49,6 +114,7 @@ class TriplaneLoRAConv2dLayer(nn.Module):
         stride: Union[int, Tuple[int, int]] = (1, 1),
         padding: Union[int, Tuple[int, int], str] = 0,
         network_alpha: Optional[float] = None,
+        with_bias: bool = False
     ):
         super().__init__()
 
@@ -60,6 +126,12 @@ class TriplaneLoRAConv2dLayer(nn.Module):
         self.up_xy = nn.Conv2d(rank, out_features, kernel_size=(1, 1), stride=(1, 1), bias=False)
         self.up_xz = nn.Conv2d(rank, out_features, kernel_size=(1, 1), stride=(1, 1), bias=False)
         self.up_yz = nn.Conv2d(rank, out_features, kernel_size=(1, 1), stride=(1, 1), bias=False)
+
+        if with_bias:
+            self.bias_xy = nn.Parameter(torch.zeros([1, out_features, 1, 1]))
+            self.bias_xz = nn.Parameter(torch.zeros([1, out_features, 1, 1]))
+            self.bias_yz = nn.Parameter(torch.zeros([1, out_features, 1, 1]))
+        self.with_bias = with_bias
 
         # This value has the same meaning as the `--network_alpha` option in the kohya-ss trainer script.
         # See https://github.com/darkstorm2150/sd-scripts/blob/main/docs/train_network_README-en.md#execute-learning
@@ -81,14 +153,20 @@ class TriplaneLoRAConv2dLayer(nn.Module):
         # xy plane
         down_hidden_states = self.down_xy(hidden_states[0::3].to(dtype))
         up_hidden_states_xy = self.up_xy(down_hidden_states)
+        if self.with_bias:
+            up_hidden_states_xy = up_hidden_states_xy + self.bias_xy
 
         # xz plane
         down_hidden_states = self.down_xz(hidden_states[1::3].to(dtype))
         up_hidden_states_xz = self.up_xz(down_hidden_states)
+        if self.with_bias:
+            up_hidden_states_xz = up_hidden_states_xz + self.bias_xz
 
         # yz plane
         down_hidden_states = self.down_yz(hidden_states[2::3].to(dtype))
         up_hidden_states_yz = self.up_yz(down_hidden_states)
+        if self.with_bias:
+            up_hidden_states_yz = up_hidden_states_yz + self.bias_yz
 
         # combine the hidden states
         up_hidden_states = torch.concat(
@@ -115,6 +193,7 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
         rank: int = 4,
         network_alpha: Optional[float] = None,
         num_planes: int = 3,
+        with_bias: bool = False
     ):
         super().__init__()
 
@@ -124,22 +203,22 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
         self.rank = rank
 
         # lora for 1st plane
-        self.to_q_xy_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
-        self.to_k_xy_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
-        self.to_v_xy_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
-        self.to_out_xy_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
+        self.to_q_xy_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_k_xy_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_v_xy_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_out_xy_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
 
         # lora for 2nd plane
-        self.to_q_xz_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
-        self.to_k_xz_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
-        self.to_v_xz_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
-        self.to_out_xz_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
+        self.to_q_xz_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_k_xz_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_v_xz_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_out_xz_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
 
         # lora for 3nd plane
-        self.to_q_yz_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
-        self.to_k_yz_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
-        self.to_v_yz_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
-        self.to_out_yz_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
+        self.to_q_yz_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_k_yz_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_v_yz_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_out_yz_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
 
     def __call__(
         self, attn: Attention, hidden_states, encoder_hidden_states=None, attention_mask=None, scale=1.0, temb=None
@@ -263,6 +342,7 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
         rank: int = 4,
         network_alpha: Optional[float] = None,
         num_planes: int = 3,
+        with_bias: bool = False
     ):
         super().__init__()
 
@@ -272,22 +352,22 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
         self.rank = rank
 
         # lora for 1st plane
-        self.to_q_xy_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
-        self.to_k_xy_lora = LoRALinearLayer(cross_attention_dim, hidden_size, rank, network_alpha)
-        self.to_v_xy_lora = LoRALinearLayer(cross_attention_dim, hidden_size, rank, network_alpha)
-        self.to_out_xy_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
+        self.to_q_xy_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_k_xy_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_v_xy_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_out_xy_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
 
         # lora for 2nd plane
-        self.to_q_xz_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
-        self.to_k_xz_lora = LoRALinearLayer(cross_attention_dim, hidden_size, rank, network_alpha)
-        self.to_v_xz_lora = LoRALinearLayer(cross_attention_dim, hidden_size, rank, network_alpha)
-        self.to_out_xz_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
+        self.to_q_xz_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_k_xz_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_v_xz_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_out_xz_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
 
         # lora for 3nd plane
-        self.to_q_yz_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
-        self.to_k_yz_lora = LoRALinearLayer(cross_attention_dim, hidden_size, rank, network_alpha)
-        self.to_v_yz_lora = LoRALinearLayer(cross_attention_dim, hidden_size, rank, network_alpha)
-        self.to_out_yz_lora = LoRALinearLayer(hidden_size, hidden_size, rank, network_alpha)
+        self.to_q_yz_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_k_yz_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_v_yz_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
+        self.to_out_yz_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
 
     def __call__(
         self, attn: Attention, hidden_states, encoder_hidden_states=None, attention_mask=None, scale=1.0, temb=None
@@ -394,7 +474,7 @@ class OneStepTriplaneStableDiffusion(BaseModule):
         timestep: int = 999,
         num_planes: int = 3,
         output_dim: int = 32,
-        gradient_checkpoint: bool = True
+        gradient_checkpoint: bool = False
 
     cfg: Config
 
@@ -426,10 +506,18 @@ class OneStepTriplaneStableDiffusion(BaseModule):
         self.trainable_params = torch.nn.ParameterDict()
 
         assert "lora" in training_type or "locon" in training_type or "full" in training_type, "The training type is not supported."
+ 
+
+
         if "lora" in training_type:
             # parse the rank from the training type, with the template "lora_rank_{}"
             rank = re.search(r"lora_rank_(\d+)", training_type).group(1)
             self.lora_rank = int(rank)
+
+            # if the finetuning is with bias
+            self.w_lora_bias = False
+            if "with_bias" in training_type:
+                self.w_lora_bias = True
 
             # specify the attn_processor for unet
             lora_attn_procs = self._set_attn_processor(self.unet, self_attn_name="attn1.processor")
@@ -447,6 +535,11 @@ class OneStepTriplaneStableDiffusion(BaseModule):
             # parse the rank from the training type, with the template "locon_rank_{}"
             rank = re.search(r"locon_rank_(\d+)", training_type).group(1)
             self.locon_rank = int(rank)
+
+            # if the finetuning is with bias
+            self.w_locon_bias = False
+            if "with_bias" in training_type:
+                self.w_locon_bias = True
 
             # specify the conv_processor for unet
             locon_procs = self._set_conv_processor(self.unet)
@@ -505,6 +598,7 @@ class OneStepTriplaneStableDiffusion(BaseModule):
                     kernel_size=_module.kernel_size,
                     stride=_module.stride,
                     padding=_module.padding,
+                    with_bias = self.w_locon_bias
                 )
                 # add the locon processor to the module
                 _module.lora_layer = locon_proc
@@ -543,13 +637,13 @@ class OneStepTriplaneStableDiffusion(BaseModule):
                 # it is self-attention
                 cross_attention_dim = None
                 lora_attn_procs[name] = self_attn_procs(
-                    hidden_size, self.lora_rank, num_planes = self.num_planes
+                    hidden_size, self.lora_rank, num_planes = self.num_planes, with_bias = self.w_lora_bias
                 )
             else:
                 # it is cross-attention
                 cross_attention_dim = module.config.cross_attention_dim
                 lora_attn_procs[name] = cross_attn_procs(
-                    hidden_size, cross_attention_dim, self.lora_rank, num_planes = self.num_planes
+                    hidden_size, cross_attention_dim, self.lora_rank, num_planes = self.num_planes, with_bias = self.w_lora_bias
                 )
         return lora_attn_procs
 
