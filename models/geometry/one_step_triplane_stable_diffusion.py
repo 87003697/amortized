@@ -27,6 +27,7 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
                 "pretrained_model_name_or_path": "stable-diffusion-2-1-base",
                 "training_type": "lora",
                 "output_dim": 32,
+                "gradient_checkpoint": True,
             }
         )
 

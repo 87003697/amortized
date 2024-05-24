@@ -394,6 +394,7 @@ class OneStepTriplaneStableDiffusion(BaseModule):
         timestep: int = 999,
         num_planes: int = 3,
         output_dim: int = 32,
+        gradient_checkpoint: bool = True
 
     cfg: Config
 
@@ -483,6 +484,10 @@ class OneStepTriplaneStableDiffusion(BaseModule):
         conv_out_new.weight.data[:3] = conv_out_orig.weight.data
         conv_out_new.bias.data[:3] = conv_out_orig.bias.data
         self.vae.decoder.conv_out = conv_out_new
+
+        if self.cfg.gradient_checkpoint:
+            self.unet.enable_gradient_checkpointing()
+            self.vae.enable_gradient_checkpointing()
 
     def _set_conv_processor(
         self,
