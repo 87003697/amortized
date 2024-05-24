@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
+import re
 
 from diffusers.models.attention_processor import Attention, AttnProcessor, LoRAAttnProcessor, LoRALinearLayer
 from threestudio.utils.typing import *
@@ -13,6 +15,94 @@ from diffusers.loaders import AttnProcsLayers
 from threestudio.utils.base import BaseModule
 from dataclasses import dataclass
 
+from diffusers.models.lora import LoRACompatibleConv
+
+class TriplaneLoRAConv2dLayer(nn.Module):
+    r"""
+    A convolutional layer that is used with LoRA.
+
+    Parameters:
+        in_features (`int`):
+            Number of input features.
+        out_features (`int`):
+            Number of output features.
+        rank (`int`, `optional`, defaults to 4):
+            The rank of the LoRA layer.
+        kernel_size (`int` or `tuple` of two `int`, `optional`, defaults to 1):
+            The kernel size of the convolution.
+        stride (`int` or `tuple` of two `int`, `optional`, defaults to 1):
+            The stride of the convolution.
+        padding (`int` or `tuple` of two `int` or `str`, `optional`, defaults to 0):
+            The padding of the convolution.
+        network_alpha (`float`, `optional`, defaults to `None`):
+            The value of the network alpha used for stable learning and preventing underflow. This value has the same
+            meaning as the `--network_alpha` option in the kohya-ss trainer script. See
+            https://github.com/darkstorm2150/sd-scripts/blob/main/docs/train_network_README-en.md#execute-learning
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        rank: int = 4,
+        kernel_size: Union[int, Tuple[int, int]] = (1, 1),
+        stride: Union[int, Tuple[int, int]] = (1, 1),
+        padding: Union[int, Tuple[int, int], str] = 0,
+        network_alpha: Optional[float] = None,
+    ):
+        super().__init__()
+
+        self.down_xy = nn.Conv2d(in_features, rank, kernel_size=kernel_size, stride=stride, padding=padding, bias=False)
+        self.down_xz = nn.Conv2d(in_features, rank, kernel_size=kernel_size, stride=stride, padding=padding, bias=False)
+        self.down_yz = nn.Conv2d(in_features, rank, kernel_size=kernel_size, stride=stride, padding=padding, bias=False)
+        # according to the official kohya_ss trainer kernel_size are always fixed for the up layer
+        # # see: https://github.com/bmaltais/kohya_ss/blob/2accb1305979ba62f5077a23aabac23b4c37e935/networks/lora_diffusers.py#L129
+        self.up_xy = nn.Conv2d(rank, out_features, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        self.up_xz = nn.Conv2d(rank, out_features, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        self.up_yz = nn.Conv2d(rank, out_features, kernel_size=(1, 1), stride=(1, 1), bias=False)
+
+        # This value has the same meaning as the `--network_alpha` option in the kohya-ss trainer script.
+        # See https://github.com/darkstorm2150/sd-scripts/blob/main/docs/train_network_README-en.md#execute-learning
+        self.network_alpha = network_alpha
+        self.rank = rank
+
+        # initialize the weights
+        nn.init.normal_(self.down_xy.weight, std=1 / rank)
+        nn.init.normal_(self.down_xz.weight, std=1 / rank)
+        nn.init.normal_(self.down_yz.weight, std=1 / rank)
+        nn.init.zeros_(self.up_xy.weight)
+        nn.init.zeros_(self.up_xz.weight)
+        nn.init.zeros_(self.up_yz.weight)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        orig_dtype = hidden_states.dtype
+        dtype = self.down_xy.weight.dtype
+
+        # xy plane
+        down_hidden_states = self.down_xy(hidden_states[0::3].to(dtype))
+        up_hidden_states_xy = self.up_xy(down_hidden_states)
+
+        # xz plane
+        down_hidden_states = self.down_xz(hidden_states[1::3].to(dtype))
+        up_hidden_states_xz = self.up_xz(down_hidden_states)
+
+        # yz plane
+        down_hidden_states = self.down_yz(hidden_states[2::3].to(dtype))
+        up_hidden_states_yz = self.up_yz(down_hidden_states)
+
+        # combine the hidden states
+        up_hidden_states = torch.concat(
+            [torch.zeros_like(up_hidden_states_yz)] * 3,
+            dim=0
+        )
+        up_hidden_states[0::3] = up_hidden_states_xy
+        up_hidden_states[1::3] = up_hidden_states_xz
+        up_hidden_states[2::3] = up_hidden_states_yz    
+
+        if self.network_alpha is not None:
+            up_hidden_states *= self.network_alpha / self.rank
+
+        return up_hidden_states.to(orig_dtype)
 
 class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
     """
@@ -330,37 +420,56 @@ class OneStepTriplaneStableDiffusion(BaseModule):
 
         # set the training type
         training_type = self.cfg.training_type
-        assert training_type in [
-            "lora_rank_4", "lora_rank_8", "lora_rank_16", "lora_rank_32", 
-            "lora_rank_64", "lora_rank_128", "lora_rank_256", 
-            "full", "lora"], "The training type is not supported."
+
+        # save trainable parameters
+        self.trainable_params = torch.nn.ParameterDict()
+
+        assert "lora" in training_type or "locon" in training_type or "full" in training_type, "The training type is not supported."
         if "lora" in training_type:
-
-            # parse the rank
-            self.rank = int(training_type.split("_")[-1])
-
-            # free all the parameters
-            for param in self.unet.parameters():
-                param.requires_grad_(False)
-            for param in self.vae.parameters():
-                param.requires_grad_(False)                
+            # parse the rank from the training type, with the template "lora_rank_{}"
+            rank = re.search(r"lora_rank_(\d+)", training_type).group(1)
+            self.lora_rank = int(rank)
 
             # specify the attn_processor for unet
             lora_attn_procs = self._set_attn_processor(self.unet, self_attn_name="attn1.processor")
             self.unet.set_attn_processor(lora_attn_procs)
-            self.lora_attn_unet = AttnProcsLayers(self.unet.attn_processors).to(self.unet.device)
-            self.lora_attn_unet._load_state_dict_pre_hooks.clear()
-            self.lora_attn_unet._state_dict_hooks.clear()
+            # update the trainable parameters
+            self.trainable_params.update(self.unet.attn_processors)
 
             # specify the attn_processor for vae
             lora_attn_procs = self._set_attn_processor(self.vae, self_attn_name="processor")
             self.vae.set_attn_processor(lora_attn_procs)
-            self.lora_attn_vae = AttnProcsLayers(self.vae.attn_processors).to(self.vae.device)
-            self.lora_attn_vae._load_state_dict_pre_hooks.clear()
-            self.lora_attn_vae._state_dict_hooks.clear()
+            # update the trainable parameters
+            self.trainable_params.update(self.vae.attn_processors)
 
-        else:
-            raise NotImplementedError("The training type is not supported.")
+        if "locon" in training_type:
+            # parse the rank from the training type, with the template "locon_rank_{}"
+            rank = re.search(r"locon_rank_(\d+)", training_type).group(1)
+            self.locon_rank = int(rank)
+
+            # # specify the conv_processor for unet
+            # locon_procs = self._set_conv_processor(self.unet)
+            # # update the trainable parameters
+            # self.trainable_params.update(locon_procs)
+
+            # specify the conv_processor for vae
+            locon_procs = self._set_conv_processor(self.vae)
+            # update the trainable parameters
+            self.trainable_params.update(locon_procs)
+   
+            
+        if "full" in training_type:
+            raise NotImplementedError("The full training type is not supported.")
+
+        # free all the parameters
+        for param in self.unet.parameters():
+            param.requires_grad_(False)
+        for param in self.vae.parameters():
+            param.requires_grad_(False)
+
+        # unfreeze the trainable parameters
+        for param in self.trainable_params.parameters():
+            param.requires_grad_(True)
 
         # overwrite the outconv
         conv_out_orig = self.vae.decoder.conv_out
@@ -374,6 +483,32 @@ class OneStepTriplaneStableDiffusion(BaseModule):
         conv_out_new.weight.data[:3] = conv_out_orig.weight.data
         conv_out_new.bias.data[:3] = conv_out_orig.bias.data
         self.vae.decoder.conv_out = conv_out_new
+
+    def _set_conv_processor(
+        self,
+        module,
+        conv_name: str = "LoRACompatibleConv",
+    ):
+        locon_procs = {}
+        for _name, _module in module.named_modules():
+            if _module.__class__.__name__ == conv_name:
+                # append the locon processor to the module
+                locon_proc = TriplaneLoRAConv2dLayer(
+                    in_features=_module.in_channels,
+                    out_features=_module.out_channels,
+                    rank=self.locon_rank,
+                    kernel_size=_module.kernel_size,
+                    stride=_module.stride,
+                    padding=_module.padding,
+                )
+                # add the locon processor to the module
+                _module.lora_layer = locon_proc
+                # update the trainable parameters
+                key_name = f"{_name}.lora_layer"
+                locon_procs[key_name] = locon_proc
+
+        return locon_procs
+
 
     def _set_attn_processor(
             self, 
@@ -403,13 +538,13 @@ class OneStepTriplaneStableDiffusion(BaseModule):
                 # it is self-attention
                 cross_attention_dim = None
                 lora_attn_procs[name] = self_attn_procs(
-                    hidden_size, self.rank, num_planes = self.num_planes
+                    hidden_size, self.lora_rank, num_planes = self.num_planes
                 )
             else:
                 # it is cross-attention
                 cross_attention_dim = module.config.cross_attention_dim
                 lora_attn_procs[name] = cross_attn_procs(
-                    hidden_size, cross_attention_dim, self.rank, num_planes = self.num_planes
+                    hidden_size, cross_attention_dim, self.lora_rank, num_planes = self.num_planes
                 )
         return lora_attn_procs
 

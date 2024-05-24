@@ -116,7 +116,11 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 depth = torch.cat(depth_list, dim=0)
 
             mask = rast[..., 3:] > 0
-         
+
+            # special case when no points are visible
+            if mask.sum() == 0: # no visible points
+                # set the mask to be the first point
+                mask[:1] = True
 
             mask_aa = self.ctx.antialias(mask.float(), rast, v_pos_clip, mesh.t_pos_idx)
             out = {"opacity": mask_aa, "mesh": mesh, "depth": depth}
