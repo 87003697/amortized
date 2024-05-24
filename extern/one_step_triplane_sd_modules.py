@@ -447,10 +447,10 @@ class OneStepTriplaneStableDiffusion(BaseModule):
             rank = re.search(r"locon_rank_(\d+)", training_type).group(1)
             self.locon_rank = int(rank)
 
-            # # specify the conv_processor for unet
-            # locon_procs = self._set_conv_processor(self.unet)
-            # # update the trainable parameters
-            # self.trainable_params.update(locon_procs)
+            # specify the conv_processor for unet
+            locon_procs = self._set_conv_processor(self.unet)
+            # update the trainable parameters
+            self.trainable_params.update(locon_procs)
 
             # specify the conv_processor for vae
             locon_procs = self._set_conv_processor(self.vae)
