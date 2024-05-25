@@ -502,13 +502,15 @@ class OneStepTriplaneStableDiffusion(BaseModule):
         # set the training type
         training_type = self.cfg.training_type
 
+
+        ############################################################
+        # overwrite the unet and vae with the customized processors
+
         # save trainable parameters
         self.trainable_params = torch.nn.ParameterDict()
 
         assert "lora" in training_type or "locon" in training_type or "full" in training_type, "The training type is not supported."
  
-
-
         if "lora" in training_type:
             # parse the rank from the training type, with the template "lora_rank_{}"
             rank = re.search(r"lora_rank_(\d+)", training_type).group(1)
@@ -551,6 +553,22 @@ class OneStepTriplaneStableDiffusion(BaseModule):
             # update the trainable parameters
             self.trainable_params.update(locon_procs)
    
+        # overwrite the outconv
+        conv_out_orig = self.vae.decoder.conv_out
+        conv_out_new = nn.Conv2d(
+            in_channels=128, out_channels=self.cfg.output_dim, kernel_size=3, padding=1
+        )
+        # # zero init the new conv_out
+        # nn.init.zeros_(conv_out_new.weight)
+        # nn.init.zeros_(conv_out_new.bias)
+        # # overwrite this module its weight and bias, copy from the original outconv
+        # conv_out_new.weight.data[:3] = conv_out_orig.weight.data
+        # conv_out_new.bias.data[:3] = conv_out_orig.bias.data
+
+        # update the trainable parameters
+        self.vae.decoder.conv_out = conv_out_new
+        self.trainable_params["vae.decoder.conv_out"] = conv_out_new
+
             
         if "full" in training_type:
             raise NotImplementedError("The full training type is not supported.")
@@ -564,19 +582,6 @@ class OneStepTriplaneStableDiffusion(BaseModule):
         # unfreeze the trainable parameters
         for param in self.trainable_params.parameters():
             param.requires_grad_(True)
-
-        # overwrite the outconv
-        conv_out_orig = self.vae.decoder.conv_out
-        conv_out_new = nn.Conv2d(
-            in_channels=128, out_channels=self.cfg.output_dim, kernel_size=3, padding=1
-        )
-        # zero init the new conv_out
-        nn.init.zeros_(conv_out_new.weight)
-        nn.init.zeros_(conv_out_new.bias)
-        # overwrite this module its weight and bias, copy from the original outconv
-        conv_out_new.weight.data[:3] = conv_out_orig.weight.data
-        conv_out_new.bias.data[:3] = conv_out_orig.bias.data
-        self.vae.decoder.conv_out = conv_out_new
 
         if self.cfg.gradient_checkpoint:
             self.unet.enable_gradient_checkpointing()
