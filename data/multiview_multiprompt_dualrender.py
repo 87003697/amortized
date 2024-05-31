@@ -55,6 +55,7 @@ class MultiviewMultipromptDualRendererDataModuleConfig:
     eval_fovy_deg: float = 70.0
     # new config for generative model optimization
     dim_gaussian: List[int] = field(default_factory=lambda: [])
+    pure_zeros: bool = False # return pure zeros for the latent code, instead of random noise
     prompt_library: str = "magic3d_prompt_library"
     prompt_library_dir: str = "load"
     prompt_library_format: str = "json"
@@ -291,7 +292,7 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
             "width": self.width,
             "fovy": fovy_deg,
             "prompt": prompts,
-            "noise": torch.randn(1, *self.cfg.dim_gaussian)
+            "noise": torch.randn(1, *self.cfg.dim_gaussian) if not self.cfg.pure_zeros else torch.zeros(1, *self.cfg.dim_gaussian)
         }
     
     def _train_collate(self, batch) -> Dict[str, Any]:
@@ -411,7 +412,7 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
             "width": self.width,
             "fovy": fovy_deg,
             "prompt": prompts,
-            "noise": torch.randn(real_batch_size, *self.cfg.dim_gaussian)
+            "noise": torch.randn(real_batch_size, *self.cfg.dim_gaussian) if not self.cfg.pure_zeros else torch.zeros(real_batch_size, *self.cfg.dim_gaussian)
         }
 
 
