@@ -47,6 +47,7 @@ class MultiviewMultipromptDualRendererDataModuleConfig:
     fovy_range: Tuple[float, float] = (40, 70,)
     azimuth_range: Tuple[float, float] = (-180, 180)
     light_distance_range: Tuple[float, float] = (0.8, 1.5)
+    relative_radius: bool = True
     # relightable settings
     light_sample_strategy: str = "dreamfusion"
     # eval camera settings
@@ -221,9 +222,9 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
         camera_distances: Float[Tensor, "B"] = torch.full_like(
             elevation_deg, self.cfg.eval_camera_distance
         )
-        # if self.cfg.relative_radius:
-        #     scale = 1 / torch.tan(0.5 * fovy)
-        #     camera_distances = scale * camera_distances
+        if self.cfg.relative_radius:
+            scale = 1 / torch.tan(0.5 * fovy)
+            camera_distances = scale * camera_distances
         ##############################################################################################################
         # convert spherical coordinates to cartesian coordinates
         # right hand coordinate system, x back, y right, z up
@@ -336,9 +337,9 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
             * (self.camera_distance_range[1] - self.camera_distance_range[0])
             + self.camera_distance_range[0]
         ).repeat_interleave(self.cfg.n_view, dim=0)
-        # if self.cfg.relative_radius:
-        #     scale = 1 / torch.tan(0.5 * fovy)
-        #     camera_distances = scale * camera_distances
+        if self.cfg.relative_radius:
+            scale = 1 / torch.tan(0.5 * fovy)
+            camera_distances = scale * camera_distances
 
         ##############################################################################################################
         # convert spherical coordinates to cartesian coordinates
