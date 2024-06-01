@@ -222,9 +222,7 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
         camera_distances: Float[Tensor, "B"] = torch.full_like(
             elevation_deg, self.cfg.eval_camera_distance
         )
-        if self.cfg.relative_radius:
-            scale = 1 / torch.tan(0.5 * fovy)
-            camera_distances = scale * camera_distances
+
         ##############################################################################################################
         # convert spherical coordinates to cartesian coordinates
         # right hand coordinate system, x back, y right, z up
