@@ -16,6 +16,7 @@ from threestudio.utils.base import BaseModule
 from dataclasses import dataclass
 
 from diffusers.models.lora import LoRACompatibleConv
+from threestudio.utils.misc import cleanup
 
 
 class LoRALinearLayerwBias(nn.Module):
@@ -483,17 +484,33 @@ class OneStepTriplaneStableDiffusion(BaseModule):
         self.num_planes = self.cfg.num_planes
         self.output_dim = self.cfg.output_dim
 
+        @dataclass
+        class SubModules:
+            unet: UNet2DConditionModel
+            vae: AutoencoderKL
+
         # we only use the unet and vae model here
         model_path = self.cfg.pretrained_model_name_or_path
-        self.unet = UNet2DConditionModel.from_pretrained(model_path, subfolder="unet")
         self.scheduler = DDPMScheduler.from_pretrained(model_path, subfolder="scheduler")
         alphas_cumprod = self.scheduler.alphas_cumprod
         self.alphas: Float[Tensor, "T"] = alphas_cumprod**0.5
         self.sigmas: Float[Tensor, "T"] = (1 - alphas_cumprod) ** 0.5
 
-        self.vae = AutoencoderKL.from_pretrained(model_path, subfolder="vae")
+        unet = UNet2DConditionModel.from_pretrained(model_path, subfolder="unet")
+        vae = AutoencoderKL.from_pretrained(model_path, subfolder="vae")
         # the encoder is not needed
-        self.vae.encoder = None
+        del vae.encoder
+        cleanup()
+        self.submodules = SubModules(
+            unet=unet.to(self.device),
+            vae=vae.to(self.device),
+        )
+
+        # free all the parameters
+        for param in self.unet.parameters():
+            param.requires_grad_(False)
+        for param in self.vae.parameters():
+            param.requires_grad_(False)
 
         # transform the attn_processor to customized one
         self.timestep = self.cfg.timestep
@@ -502,12 +519,11 @@ class OneStepTriplaneStableDiffusion(BaseModule):
         # set the training type
         training_type = self.cfg.training_type
 
-
         ############################################################
         # overwrite the unet and vae with the customized processors
 
         # save trainable parameters
-        self.trainable_params = torch.nn.ParameterDict()
+        trainable_params = {}
 
         assert "lora" in training_type or "locon" in training_type or "full" in training_type, "The training type is not supported."
  
@@ -525,13 +541,13 @@ class OneStepTriplaneStableDiffusion(BaseModule):
             lora_attn_procs = self._set_attn_processor(self.unet, self_attn_name="attn1.processor")
             self.unet.set_attn_processor(lora_attn_procs)
             # update the trainable parameters
-            self.trainable_params.update(self.unet.attn_processors)
+            trainable_params.update(self.unet.attn_processors)
 
             # specify the attn_processor for vae
             lora_attn_procs = self._set_attn_processor(self.vae, self_attn_name="processor")
             self.vae.set_attn_processor(lora_attn_procs)
             # update the trainable parameters
-            self.trainable_params.update(self.vae.attn_processors)
+            trainable_params.update(self.vae.attn_processors)
 
         if "locon" in training_type:
             # parse the rank from the training type, with the template "locon_rank_{}"
@@ -546,46 +562,48 @@ class OneStepTriplaneStableDiffusion(BaseModule):
             # specify the conv_processor for unet
             locon_procs = self._set_conv_processor(self.unet)
             # update the trainable parameters
-            self.trainable_params.update(locon_procs)
+            trainable_params.update(locon_procs)
 
             # specify the conv_processor for vae
             locon_procs = self._set_conv_processor(self.vae)
             # update the trainable parameters
-            self.trainable_params.update(locon_procs)
-   
-        # overwrite the outconv
-        conv_out_orig = self.vae.decoder.conv_out
-        conv_out_new = nn.Conv2d(
-            in_channels=128, out_channels=self.cfg.output_dim, kernel_size=3, padding=1
-        )
-        # # zero init the new conv_out
-        # nn.init.zeros_(conv_out_new.weight)
-        # nn.init.zeros_(conv_out_new.bias)
-        # # overwrite this module its weight and bias, copy from the original outconv
-        # conv_out_new.weight.data[:3] = conv_out_orig.weight.data
-        # conv_out_new.bias.data[:3] = conv_out_orig.bias.data
+            trainable_params.update(locon_procs)
 
-        # update the trainable parameters
-        self.vae.decoder.conv_out = conv_out_new
-        self.trainable_params["vae.decoder.conv_out"] = conv_out_new
-
-            
         if "full" in training_type:
             raise NotImplementedError("The full training type is not supported.")
 
-        # free all the parameters
-        for param in self.unet.parameters():
-            param.requires_grad_(False)
-        for param in self.vae.parameters():
-            param.requires_grad_(False)
+        # overwrite the outconv
+        # conv_out_orig = self.vae.decoder.conv_out
+        conv_out_new = nn.Conv2d(
+            in_channels=128, # conv_out_orig.in_channels, hard-coded
+            out_channels=self.cfg.output_dim, kernel_size=3, padding=1
+        )
 
-        # unfreeze the trainable parameters
-        for param in self.trainable_params.parameters():
-            param.requires_grad_(True)
+        # update the trainable parameters
+        self.vae.decoder.conv_out = conv_out_new
+        trainable_params["vae.decoder.conv_out"] = conv_out_new
+
+
+        # save the trainable parameters
+        self.peft_layers = AttnProcsLayers(trainable_params).to(self.device)
+        self.peft_layers._load_state_dict_pre_hooks.clear()
+        self.peft_layers._state_dict_hooks.clear()        
+
+        # # unfreeze the trainable parameters
+        # for param in self.trainable_params.parameters():
+        #     param.requires_grad_(True)
 
         if self.cfg.gradient_checkpoint:
             self.unet.enable_gradient_checkpointing()
             self.vae.enable_gradient_checkpointing()
+
+    @property
+    def unet(self):
+        return self.submodules.unet
+
+    @property
+    def vae(self):
+        return self.submodules.vae
 
     def _set_conv_processor(
         self,
@@ -610,8 +628,8 @@ class OneStepTriplaneStableDiffusion(BaseModule):
                 # update the trainable parameters
                 key_name = f"{_name}.lora_layer"
                 locon_procs[key_name] = locon_proc
-
         return locon_procs
+
 
 
     def _set_attn_processor(
