@@ -63,10 +63,7 @@ class MultiviewMultipromptDualRendererDataModuleConfig:
     target_prompt: Optional[str] = None
     eval_fix_camera: Optional[int] = None # can be int, then fix the camera to the specified view
     # prompt processor configs
-    # data config
-    # rgb_dir: str=""
-    # json_dir: str=""
-    # index: int=0
+
 
 class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
     def __init__(self, cfg: Any, split: str, prompt_library: List, prompt_processor = None) -> None:
