@@ -857,7 +857,7 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule(pl.LightningDataM
             self.sup_obj_library = json.load(f)
 
         ##############################################################################################################
-        self.num_workers = 0 #2 # for debugging
+        self.num_workers = 2 #2 # for debugging
         self.pin_memory = False
         self.prefetch_factor = 2 if self.num_workers > 0 else None
 
@@ -878,7 +878,6 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule(pl.LightningDataM
         )
 
         if stage in (None, "fit"):
-
             # prepare the dataset
             prompt_lists = self.unsup_prompt_library["train"] \
                 + [obj['caption'] for obj in self.sup_obj_library["train"].values()]

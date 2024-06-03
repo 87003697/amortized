@@ -13,7 +13,7 @@ from threestudio.utils.typing import *
 from threestudio.utils.misc import barrier, cleanup
 
 from tqdm import tqdm
-from collections import OrderedDict
+from functools import partial
 
 from threestudio.models.prompt_processors.base import (
     DirectionConfig, shift_azimuth_deg, PromptProcessorOutput,
@@ -21,12 +21,36 @@ from threestudio.models.prompt_processors.base import (
 )
 from threestudio.utils.misc import get_rank
 from torch.multiprocessing import Pool
-import torch.distributed as dist
 
-from concurrent.futures import ThreadPoolExecutor
 from itertools import cycle
 from .utils import _load_prompt_embedding, hash_prompt
-from concurrent.futures import ThreadPoolExecutor,as_completed
+
+##############################################
+# the following fucntions are warpped up
+# so that they can be used in the multiprocessing
+def format_view(s: str, view: str) -> str:
+    return f"{view} view of {s}"
+
+def format_view_v2(s: str, view: str) -> str:
+    return f"{s}, {view} view"
+
+def dummy_map_fn(x):
+    return x
+
+def is_within_back_view(ele, azi, dis, back_threshold):
+    shifted_azi = shift_azimuth_deg(azi)
+    return (shifted_azi > 180 - back_threshold) | (shifted_azi < -180 + back_threshold)
+
+def is_within_front_view(ele, azi, dis, front_threshold):
+    shifted_azi = shift_azimuth_deg(azi)
+    return (shifted_azi > -front_threshold) & (shifted_azi < front_threshold)
+
+def is_above_overhead_threshold(ele, azi, dis, overhead_threshold):
+    return ele > overhead_threshold
+
+def is_within_side_view(ele, azi, dis):
+    return torch.ones_like(ele, dtype=torch.bool)
+##############################################
 
 class MultiPromptProcessor(BaseObject):
     @dataclass
@@ -62,14 +86,8 @@ class MultiPromptProcessor(BaseObject):
 
     cfg: Config
 
-
-    @rank_zero_only
-    def configure_text_encoder(self) -> None:
-        raise NotImplementedError
-
-    @rank_zero_only
-    def destroy_text_encoder(self) -> None:
-        raise NotImplementedError
+    def __reduce__(self) -> str | tuple[Any, ...]:
+        return (self.__class__, (self.configure,))
     
     def configure(self) -> None:
         
@@ -84,66 +102,56 @@ class MultiPromptProcessor(BaseObject):
             self.directions = [
                 DirectionConfig(
                     "side",
-                    lambda s: f"side view of {s}",
-                    lambda s: s,
-                    lambda ele, azi, dis: torch.ones_like(ele, dtype=torch.bool),
+                    partial(format_view, view="side"),
+                    dummy_map_fn,
+                    partial(is_within_side_view),
                 ),
                 DirectionConfig(
                     "front",
-                    lambda s: f"front view of {s}",
-                    lambda s: s,
-                    lambda ele, azi, dis: (
-                        shift_azimuth_deg(azi) > -self.cfg.front_threshold
-                    )
-                    & (shift_azimuth_deg(azi) < self.cfg.front_threshold),
+                    partial(format_view, view="front"),
+                    dummy_map_fn,
+                    partial(is_within_front_view, front_threshold=self.cfg.front_threshold),
+
                 ),
                 DirectionConfig(
                     "back",
-                    lambda s: f"backside view of {s}",
-                    lambda s: s,
-                    lambda ele, azi, dis: (
-                        shift_azimuth_deg(azi) > 180 - self.cfg.back_threshold
-                    )
-                    | (shift_azimuth_deg(azi) < -180 + self.cfg.back_threshold),
+                    partial(format_view, view="back"),
+                    dummy_map_fn,
+                    partial(is_within_back_view, back_threshold=self.cfg.back_threshold),
+
                 ),
                 DirectionConfig(
                     "overhead",
-                    lambda s: f"overhead view of {s}",
-                    lambda s: s,
-                    lambda ele, azi, dis: ele > self.cfg.overhead_threshold,
+                    partial(format_view, view="overhead"),
+                    dummy_map_fn,
+                    partial(is_above_overhead_threshold, overhead_threshold=self.cfg.overhead_threshold),
                 ),
             ]
         else:
             self.directions = [
                 DirectionConfig(
                     "side",
-                    lambda s: f"{s}, side view",
-                    lambda s: s,
-                    lambda ele, azi, dis: torch.ones_like(ele, dtype=torch.bool),
+                    partial(format_view_v2, view="side"),
+                    dummy_map_fn,
+                    partial(is_within_side_view),
                 ),
                 DirectionConfig(
                     "front",
-                    lambda s: f"{s}, front view",
-                    lambda s: s,
-                    lambda ele, azi, dis: (
-                        shift_azimuth_deg(azi) > -self.cfg.front_threshold
-                    )
-                    & (shift_azimuth_deg(azi) < self.cfg.front_threshold),
+                    partial(format_view_v2, view="front"),
+                    dummy_map_fn,
+                    partial(is_within_front_view, front_threshold=self.cfg.front_threshold),
                 ),
                 DirectionConfig(
                     "back",
-                    lambda s: f"{s}, back view",
-                    lambda s: s,
-                    lambda ele, azi, dis: (
-                        shift_azimuth_deg(azi) > 180 - self.cfg.back_threshold
-                    )
-                    | (shift_azimuth_deg(azi) < -180 + self.cfg.back_threshold),
+                    partial(format_view_v2, view="back"),
+                    dummy_map_fn,
+                    partial(is_within_back_view, back_threshold=self.cfg.back_threshold),
                 ),
                 DirectionConfig(
                     "overhead",
-                    lambda s: f"{s}, overhead view",
-                    lambda s: s,
-                    lambda ele, azi, dis: ele > self.cfg.overhead_threshold,
+                    partial(format_view_v2, view="overhead"),
+                    dummy_map_fn,
+                    partial(is_above_overhead_threshold, overhead_threshold=self.cfg.overhead_threshold),
                 ),
             ]
 
@@ -324,7 +332,7 @@ class MultiPromptProcessor(BaseObject):
         global_text_embeddings, local_text_embeddings, text_embeddings_vd = self.load_text_embeddings(prompt)
         
         prompt_args = {
-            "global_text_embeddings": [global_text_embeddings[p] for p in prompt],
+            "global_text_embeddings": [global_text_embeddings[p ] for p in prompt],
             "local_text_embeddings": [local_text_embeddings[p] for p in prompt],
             "uncond_text_embeddings": local_text_embeddings[self.negative_prompt],
             "text_embeddings_vd": [text_embeddings_vd[p] for p in prompt],
