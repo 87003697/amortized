@@ -114,9 +114,6 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         )
 
         self.sd_use_perp_neg = self.cfg.sd_guidance_perp_neg != 0
-        assert self.sd_use_perp_neg == False, NotImplementedError(
-            "Perpendicular negative guidance is not supported in this version"
-        )
 
         ################################################################################################
         threestudio.info(f"Loading Multiview Diffusion ...")
@@ -235,10 +232,12 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         # determine if dual rendering is enabled
         is_dual = True if rgb_2nd is not None else False
 
-        batch_size = rgb.shape[0]
+        view_batch_size = rgb.shape[0] # the number of views 
+        img_batch_size = rgb.shape[0] 
         rgb_BCHW = rgb.permute(0, 3, 1, 2)
         # special case for dual rendering
         if is_dual:
+            img_batch_size *= 2
             rgb_2nd_BCHW = rgb_2nd.permute(0, 3, 1, 2)
 
         ################################################################################################
@@ -263,24 +262,59 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             
             # repeat the text embeddings w.r.t. the number of views
             text_embeddings_vd     = text_embeddings[0 * text_batch_size: 1 * text_batch_size].repeat_interleave(
-                batch_size // text_batch_size, dim = 0
+                view_batch_size // text_batch_size, dim = 0
             )
             text_embeddings_uncond = text_embeddings[1 * text_batch_size: 2 * text_batch_size].repeat_interleave(
-                batch_size // text_batch_size, dim = 0
+                view_batch_size // text_batch_size, dim = 0
             )
 
             text_embeddings = torch.cat(
                 [
-                    text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1),
+                    text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 1st diffusion model
                     text_embeddings_uncond if not is_dual else text_embeddings_uncond.repeat(2, 1, 1),
-                    text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1),
+                    text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 2nd diffusion model
                 ], 
                 dim=0
             )
+
+            neg_guidance_weights = None
         else:
-            raise NotImplementedError(
-                "Perpendicular negative guidance is not supported in this version"
+            assert prompt_utils.use_perp_neg # just to make sure
+            (
+                text_embeddings,
+                neg_guidance_weights,
+            ) = prompt_utils.get_text_embeddings_perp_neg(
+                elevation, azimuth, camera_distances, 
+                view_dependent_prompting=self.cfg.sd_view_dependent_prompting,
+                use_2nd_uncond = False
             )
+
+
+            text_batch_size = text_embeddings.shape[0] // 4
+            neg_guidance_weights = neg_guidance_weights * -1 * self.cfg.sd_guidance_perp_neg # multiply by a negative value to control its magnitude
+
+            text_embeddings_vd     = text_embeddings[0 * text_batch_size: 1 * text_batch_size].repeat_interleave(
+                view_batch_size // text_batch_size, dim = 0
+            )
+            text_embeddings_uncond = text_embeddings[1 * text_batch_size: 2 * text_batch_size].repeat_interleave(
+                view_batch_size // text_batch_size, dim = 0
+            )
+            text_embeddings_vd_neg = text_embeddings[2 * text_batch_size: 4 * text_batch_size].repeat_interleave(
+                view_batch_size // text_batch_size, dim = 0
+            )
+
+            text_embeddings = torch.cat(
+                [
+                    text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 1st diffusion model
+                    text_embeddings_uncond if not is_dual else text_embeddings_uncond.repeat(2, 1, 1),
+                    text_embeddings_vd_neg if not is_dual else text_embeddings_vd_neg.repeat(2, 1, 1),
+                    text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 2nd diffusion model
+                ],
+                dim=0
+            )
+
+            if is_dual: # repeat the neg_guidance_weights
+                neg_guidance_weights = neg_guidance_weights.repeat(2, 1)
 
         assert self.min_step is not None and self.max_step is not None
         with torch.no_grad():
@@ -289,10 +323,11 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             t = torch.randint(
                 self.min_step,
                 self.max_step + 1,
-                [batch_size if not is_dual else 2 * batch_size],
+                [img_batch_size],
                 dtype=torch.long,
                 device=self.device,
             )
+
 
             # bigger timestamp 
             t_plus = self.get_t_plus(t)
@@ -303,11 +338,15 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             # random timestamp for the second diffusion model
             latents_noisy_second = self.sd_scheduler.add_noise(sd_latents, sd_noise, t_plus)
 
+            # repeat the latents for the first diffusion model, if use_perp_neg is enabled, then
+            # require 4 repeats, otherwise 2
+            num_repeats = 2 if not self.sd_use_perp_neg else 4
+
             # prepare input for UNet
             latents_model_input = torch.cat(
                 [
                     latents_noisy,
-                    latents_noisy,
+                ] * num_repeats + [        
                     latents_noisy_second,
                 ],
                 dim=0,
@@ -316,7 +355,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             t_expand = torch.cat(
                 [
                     t,
-                    t,
+                ] * num_repeats + [
                     t_plus,
                 ],
                 dim=0,
@@ -341,14 +380,28 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 f"Unknown weighting strategy: {self.cfg.weighting_strategy}"
             )
 
-        # perform guidance
-        noise_pred_text, noise_pred_uncond, noise_pred_text_second = noise_pred.chunk(
-            3
-        )
-        noise_pred_first = noise_pred_uncond + self.cfg.guidance_scale * (
-            noise_pred_text - noise_pred_uncond
-        )
-        noise_pred_second = noise_pred_text_second
+        # split the noise_pred
+        noise_pred_text    = noise_pred[0 * img_batch_size: 1 * img_batch_size]
+        noise_pred_uncond  = noise_pred[1 * img_batch_size: 2 * img_batch_size]
+        noise_pred_vd_neg  = noise_pred[2 * img_batch_size: 4 * img_batch_size] if self.sd_use_perp_neg else None
+        noise_pred_second  = noise_pred[4 * img_batch_size: 5 * img_batch_size] if not self.sd_use_perp_neg else noise_pred[2 * img_batch_size: 3 * img_batch_size]
+
+        # aggregate the noise_pred
+        eps_pos = noise_pred_text - noise_pred_uncond
+        if neg_guidance_weights is not None: # use_perp_neg is enabled
+            accum_grad = 0
+            n_negative_prompts = neg_guidance_weights.shape[-1]
+            for i in range(n_negative_prompts):
+                eps_vd_neg = noise_pred_vd_neg[i::n_negative_prompts] - noise_pred_uncond
+                accum_grad += neg_guidance_weights[:, i].view(
+                    -1, *[1] * (eps_vd_neg.ndim - 1)
+                ) * perpendicular_component(eps_vd_neg, eps_pos) # eps_vd_neg # v2
+
+            # noise_pred_p = (eps_pos) * guidenace_scale + noise_pred_uncond + accum_grad
+            noise_pred_first = (eps_pos + accum_grad) * self.cfg.guidance_scale + noise_pred_uncond 
+
+        else: # if not use_perp_neg
+            noise_pred_first = eps_pos                * self.cfg.guidance_scale + noise_pred_uncond
 
         grad = (noise_pred_first - noise_pred_second) * w
         grad = torch.nan_to_num(grad)
@@ -360,20 +413,20 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         # d(loss)/d(latents) = latents - target = latents - (latents - grad) = grad
         target = (sd_latents - grad).detach()
         if not is_dual:
-            loss_asd = 0.5 * F.mse_loss(sd_latents, target, reduction="sum") / batch_size
+            loss_asd = 0.5 * F.mse_loss(sd_latents, target, reduction="sum") / view_batch_size
             return loss_asd, grad.norm()
         else:
             # split the grad into two parts
             loss_asd = torch.stack(
                 [
-                    0.5 * F.mse_loss(sd_latents[:batch_size], target[:batch_size], reduction="sum") / batch_size,
-                    0.5 * F.mse_loss(sd_latents[batch_size:], target[batch_size:], reduction="sum") / batch_size,
+                    0.5 * F.mse_loss(sd_latents[:view_batch_size], target[:view_batch_size], reduction="sum") / view_batch_size,
+                    0.5 * F.mse_loss(sd_latents[view_batch_size:], target[view_batch_size:], reduction="sum") / view_batch_size,
                 ]
             )
             grad_norm = torch.stack(
                 [
-                    grad[:batch_size].norm(),
-                    grad[batch_size:].norm(),
+                    grad[:view_batch_size].norm(),
+                    grad[view_batch_size:].norm(),
                 ]
             )
             return loss_asd, grad_norm
@@ -443,10 +496,13 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         # determine if dual rendering is enabled
         is_dual = True if rgb_2nd is not None else False
 
-        batch_size = rgb.shape[0]
+        view_batch_size = rgb.shape[0]
+        img_batch_size = rgb.shape[0]
         rgb_BCHW = rgb.permute(0, 3, 1, 2)
+
         # special case for dual rendering
         if is_dual:
+            img_batch_size *= 2
             rgb_2nd_BCHW = rgb_2nd.permute(0, 3, 1, 2)
 
         ################################################################################################
@@ -487,10 +543,10 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             do so for text_embeddings_vd and text_embeddings_uncond
         """
         text_embeddings_vd     = text_embeddings[0 * text_batch_size: 1 * text_batch_size].repeat_interleave(
-            batch_size // text_batch_size, dim = 0
+            view_batch_size // text_batch_size, dim = 0
         )
         text_embeddings_uncond = text_embeddings[1 * text_batch_size: 2 * text_batch_size].repeat_interleave(
-            batch_size // text_batch_size, dim = 0
+            view_batch_size // text_batch_size, dim = 0
         )
 
         """
@@ -537,16 +593,17 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             _t = torch.randint(
                 self.min_step,
                 self.max_step + 1,
-                [1],
+                [text_batch_size if not is_dual else 2 * text_batch_size],
                 dtype=torch.long,
                 device=self.device,
             )
-            t = _t.repeat(batch_size if not is_dual else 2 * batch_size)
-
             # bigger timestamp 
             _t_plus = self.get_t_plus(_t)
-            t_plus = _t_plus.repeat(batch_size if not is_dual else 2 * batch_size)
 
+            # keep consistent with the number of views for each prompt
+            t = _t.repeat_interleave(self.cfg.mv_n_view)
+            t_plus = _t_plus.repeat_interleave(self.cfg.mv_n_view)
+            
             # random timestamp for the first diffusion model
             latents_noisy = self.mv_model.q_sample(mv_latents, t, noise=mv_noise)
 
@@ -623,20 +680,20 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         target = (mv_latents - grad).detach()
 
         if not is_dual:
-            loss_asd = 0.5 * F.mse_loss(mv_latents, target, reduction="sum") / batch_size 
+            loss_asd = 0.5 * F.mse_loss(mv_latents, target, reduction="sum") / view_batch_size 
             return loss_asd, grad.norm()
         else:
             # split the loss and grad_norm for the 1st and 2nd renderings
             loss_asd = torch.stack(
                 [
-                    0.5 * F.mse_loss(mv_latents[:batch_size], target[:batch_size], reduction="sum") / batch_size,
-                    0.5 * F.mse_loss(mv_latents[batch_size:], target[batch_size:], reduction="sum") / batch_size,
+                    0.5 * F.mse_loss(mv_latents[:view_batch_size], target[:view_batch_size], reduction="sum") / view_batch_size,
+                    0.5 * F.mse_loss(mv_latents[view_batch_size:], target[view_batch_size:], reduction="sum") / view_batch_size,
                 ]
             )
             grad_norm = torch.stack(
                 [
-                    grad[:batch_size].norm(),
-                    grad[batch_size:].norm(),
+                    grad[:view_batch_size].norm(),
+                    grad[view_batch_size:].norm(),
                 ]
             )
             return loss_asd, grad_norm

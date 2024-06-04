@@ -545,9 +545,6 @@ class MultiPromptProcessorOutput:
             view_dependent_prompting
         ), "Perp-Neg only works with view-dependent prompting"
 
-        if use_2nd_uncond:
-            raise NotImplementedError("Perp-Neg with 2nd uncond is not implemented yet")
-
         batch_size = len(self.global_text_embeddings)
 
         if guidance_scale_neg is None:
@@ -587,14 +584,15 @@ class MultiPromptProcessorOutput:
             # the following code is similar to stable_diffusion_prompt_processor.py
             azi = shift_azimuth_deg(azi)  # to (-180, 180)
             uncond_text_embeddings.append(
-                self.uncond_text_embeddings_vd[idx]
+                self.uncond_text_embeddings_vd[idx] if not use_2nd_uncond else self.uncond_text_embeddings_vd_2nd[idx]
             )  # should be ""
             if idx.item() == 3:  # overhead view
                 pos_text_embeddings += [overhead_emb]
+                
                 # dummy
                 neg_text_embeddings += [
-                    self.uncond_text_embeddings_vd[idx],
-                    self.uncond_text_embeddings_vd[idx],
+                    self.uncond_text_embeddings_vd[idx] if not use_2nd_uncond else self.uncond_text_embeddings_vd_2nd[idx],
+                    self.uncond_text_embeddings_vd[idx] if not use_2nd_uncond else self.uncond_text_embeddings_vd_2nd[idx],
                 ]
                 neg_guidance_weights += [0.0, 0.0]
             else:  # interpolating views

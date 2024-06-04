@@ -488,7 +488,7 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Test(BaseDataset)
 
             ##############################################################################################################
             # load camera pose
-            azimuths_deg = np.arange(0, 360, 360 / n_view)
+            azimuths_deg = np.arange(0, 360, 360 / n_view, dtype=np.float32)
             
             with open(
                     os.path.join(
@@ -650,7 +650,7 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
             azimuth_interval = 360 / n_view # generally 360 / 32 = 11.25
             indice_interval = n_view // self.cfg.n_view # generally 32 / 4 = 8
 
-            all_azimuths = np.arange(0, 360, azimuth_interval)
+            all_azimuths = np.arange(0, 360, azimuth_interval, dtype=np.float32)
             all_indices = np.arange(
                 self.cfg.frontal_idx, 
                 self.cfg.frontal_idx + n_view
@@ -857,7 +857,7 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule(pl.LightningDataM
             self.sup_obj_library = json.load(f)
 
         ##############################################################################################################
-        self.num_workers = 2 #2 # for debugging
+        self.num_workers = 2 #0 # for debugging
         self.pin_memory = False
         self.prefetch_factor = 2 if self.num_workers > 0 else None
 
