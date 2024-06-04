@@ -384,7 +384,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         noise_pred_text    = noise_pred[0 * img_batch_size: 1 * img_batch_size]
         noise_pred_uncond  = noise_pred[1 * img_batch_size: 2 * img_batch_size]
         noise_pred_vd_neg  = noise_pred[2 * img_batch_size: 4 * img_batch_size] if self.sd_use_perp_neg else None
-        noise_pred_second  = noise_pred[4 * img_batch_size: 5 * img_batch_size] if not self.sd_use_perp_neg else noise_pred[2 * img_batch_size: 3 * img_batch_size]
+        noise_pred_second  = noise_pred[4 * img_batch_size: 5 * img_batch_size] if self.sd_use_perp_neg else noise_pred[2 * img_batch_size: 3 * img_batch_size]
 
         # aggregate the noise_pred
         eps_pos = noise_pred_text - noise_pred_uncond
