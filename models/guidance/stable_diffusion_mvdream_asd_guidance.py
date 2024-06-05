@@ -761,12 +761,27 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 device=self.device
             )
     
-        ################################################################################################
+       ################################################################################################
         # due to the computation cost
         # the following is specific to Stable Diffusion
         # for any n_view, select only one view for the guidance
-        idx = torch.randint(0, self.cfg.mv_n_view, (rgb.shape[0] // self.cfg.mv_n_view, ), device=self.device, dtype=torch.long)
+        if self.cfg.sd_view_dependent_prompting: 
+            # if view_dependent_prompting is enabled, we can select any view (azimuth: -180, 180) for the guidance
+            idx = torch.randint(
+                0, self.cfg.mv_n_view, 
+                (rgb.shape[0] // self.cfg.mv_n_view, ), device=self.device, dtype=torch.long
+            )
+        else:
+            # otherwise, select the frontal view (azimuth: -90, 90) for the guidance
+            assert self.cfg.mv_n_view % 4 == 0 # only support 4, 8, 12, 16, ...
+            left = self.cfg.mv_n_view // 4 * 1
+            right = self.cfg.mv_n_view // 4 * 2 + 1
+            idx = torch.randint(
+                left, right, 
+                (rgb.shape[0] // self.cfg.mv_n_view, ), device=self.device, dtype=torch.long
+            )
         idx += torch.arange(0, rgb.shape[0], self.cfg.mv_n_view, device=self.device, dtype=torch.long)
+        
         # select only one view for the guidance
         if self.cfg.sd_weight > 0:
             loss_sd, grad_sd = self.sd_grad_asd(
