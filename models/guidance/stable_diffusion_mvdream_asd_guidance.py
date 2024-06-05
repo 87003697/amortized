@@ -68,6 +68,9 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         sd_weight: float = 1.
         mv_weight: float = 0.25 # 1 / 4
 
+        # the following is specific to the compatibility with dual rendering
+        dual_render_sync_t: bool = False
+
     cfg: Config
 
     @torch.cuda.amp.autocast(enabled=False)
@@ -319,18 +322,33 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         assert self.min_step is not None and self.max_step is not None
         with torch.no_grad():
 
-            # the following is specific to ASD
-            t = torch.randint(
-                self.min_step,
-                self.max_step + 1,
-                [img_batch_size],
-                dtype=torch.long,
-                device=self.device,
-            )
+            if is_dual and self.cfg.dual_render_sync_t:
+                t = torch.randint(
+                    self.min_step,
+                    self.max_step + 1,
+                    [view_batch_size],
+                    dtype=torch.long,
+                    device=self.device,
+                )
+                
+                t = t.repeat(2) # repeat for the 1st and 2nd renderings
 
+                # bigger timestamp, the following is specific to ASD
+                # as t_plus is randomly sampled in ASD, 
+                # sample different t_plus for the 1st and 2nd renderings covers larger range
+                t_plus = self.get_t_plus(t)
+                
+            else:
+                t = torch.randint(
+                    self.min_step,
+                    self.max_step + 1,
+                    [img_batch_size],
+                    dtype=torch.long,
+                    device=self.device,
+                )
 
-            # bigger timestamp 
-            t_plus = self.get_t_plus(t)
+                # bigger timestamp, the following is specific to ASD
+                t_plus = self.get_t_plus(t)
 
             # random timestamp for the first diffusion model
             latents_noisy = self.sd_scheduler.add_noise(sd_latents, sd_noise, t)
@@ -589,16 +607,33 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         assert self.min_step is not None and self.max_step is not None
         with torch.no_grad():
 
-            # the following is specific to ASD
-            _t = torch.randint(
-                self.min_step,
-                self.max_step + 1,
-                [text_batch_size if not is_dual else 2 * text_batch_size],
-                dtype=torch.long,
-                device=self.device,
-            )
-            # bigger timestamp 
-            _t_plus = self.get_t_plus(_t)
+            if is_dual and self.cfg.dual_render_sync_t:
+                _t = torch.randint(
+                    self.min_step,
+                    self.max_step + 1,
+                    [text_batch_size],
+                    dtype=torch.long,
+                    device=self.device,
+                )
+
+                # repeat for the 1st and 2nd renderings
+                _t = _t.repeat(2) 
+
+                # bigger timestamp, the following is specific to ASD
+                # as t_plus is randomly sampled in ASD, 
+                # sample different t_plus for the 1st and 2nd renderings covers larger range
+                _t_plus = self.get_t_plus(_t)
+
+            else:
+                _t = torch.randint(
+                    self.min_step,
+                    self.max_step + 1,
+                    [text_batch_size if not is_dual else 2 * text_batch_size],
+                    dtype=torch.long,
+                    device=self.device,
+                )
+                # bigger timestamp, the following is specific to ASD
+                _t_plus = self.get_t_plus(_t)
 
             # keep consistent with the number of views for each prompt
             t = _t.repeat_interleave(self.cfg.mv_n_view)
@@ -781,7 +816,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 (rgb.shape[0] // self.cfg.mv_n_view, ), device=self.device, dtype=torch.long
             )
         idx += torch.arange(0, rgb.shape[0], self.cfg.mv_n_view, device=self.device, dtype=torch.long)
-        
+
         # select only one view for the guidance
         if self.cfg.sd_weight > 0:
             loss_sd, grad_sd = self.sd_grad_asd(
