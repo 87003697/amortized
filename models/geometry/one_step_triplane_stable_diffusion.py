@@ -59,7 +59,7 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
         # xy plane should looks that a img from top-down / bottom-up view
         # xz plane should looks that a img from right-left / left-right view
         # yz plane should looks that a img from front-back / back-front view
-        rotate_planes: Optional[str] = "v1" # "v1"
+        rotate_planes: Optional[str] = None # "v1"
 
 
     def configure(self) -> None:
