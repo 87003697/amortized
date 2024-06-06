@@ -684,8 +684,15 @@ class OneStepTriplaneStableDiffusion(BaseModule):
             ).to(text_embed.device) * self.timestep
         t = t.long()
 
-        # repeat the text_embed
-        text_embed = text_embed.repeat_interleave(self.num_planes, dim=0)
+        if text_embed.ndim == 3:
+            # same text_embed for all planes
+            # repeat the text_embed
+            text_embed = text_embed.repeat_interleave(self.num_planes, dim=0)
+        elif text_embed.ndim == 4:
+            # different text_embed for each plane
+            text_embed = text_embed.view(batch_size * self.num_planes, *text_embed.shape[-2:])
+        else:
+            raise ValueError("The text_embed should be either 3D or 4D.")
 
         # reshape the styles
         styles = styles.view(-1, 4, noise_shape, noise_shape)
