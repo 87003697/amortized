@@ -70,6 +70,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
         # the following is specific to the compatibility with dual rendering
         dual_render_sync_t: bool = False
+        dual_render_sync_view_sd: bool = True
 
     cfg: Config
 
@@ -230,6 +231,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         rgb_as_latents: bool = False,
         fovy=None,
         rgb_2nd: Optional[Float[Tensor, "B H W C"]] = None,
+        azimuth_2nd: Optional[Float[Tensor, "B"]] = None,
         **kwargs,
     ):
         # determine if dual rendering is enabled
@@ -242,6 +244,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         if is_dual:
             img_batch_size *= 2
             rgb_2nd_BCHW = rgb_2nd.permute(0, 3, 1, 2)
+            assert azimuth_2nd is not None, "azimuth_2nd is required for dual rendering"
 
         ################################################################################################
         # the following is specific to MVDream
@@ -271,11 +274,26 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 view_batch_size // text_batch_size, dim = 0
             )
 
+            # if dual rendering is enabled, fetch the text embeddings for the 2nd rendering
+            if is_dual:
+                text_embeddings_vd_2nd = prompt_utils.get_text_embeddings(
+                    elevation, azimuth_2nd, camera_distances,
+                    view_dependent_prompting=self.cfg.sd_view_dependent_prompting,
+                    use_2nd_uncond = False
+                )
+                # we only need the view-dependent text embeddings
+                text_embeddings_vd_2nd = text_embeddings_vd_2nd[0 * text_batch_size: 1 * text_batch_size].repeat_interleave(
+                    view_batch_size // text_batch_size, dim = 0
+                )
+
             text_embeddings = torch.cat(
                 [
-                    text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 1st diffusion model
-                    text_embeddings_uncond if not is_dual else text_embeddings_uncond.repeat(2, 1, 1),
-                    text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 2nd diffusion model
+                    text_embeddings_vd if not is_dual else 
+                        torch.cat([text_embeddings_vd, text_embeddings_vd_2nd], dim=0),
+                    text_embeddings_uncond if not is_dual else 
+                        text_embeddings_uncond.repeat(2, 1, 1), # same for the 1st and 2nd renderings
+                    text_embeddings_vd if not is_dual else 
+                        torch.cat([text_embeddings_vd, text_embeddings_vd_2nd], dim=0),
                 ], 
                 dim=0
             )
@@ -292,32 +310,33 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 use_2nd_uncond = False
             )
 
+            raise NotImplementedError("The perp_neg is not implemented yet")
+        
+            # text_batch_size = text_embeddings.shape[0] // 4
+            # neg_guidance_weights = neg_guidance_weights * -1 * self.cfg.sd_guidance_perp_neg # multiply by a negative value to control its magnitude
 
-            text_batch_size = text_embeddings.shape[0] // 4
-            neg_guidance_weights = neg_guidance_weights * -1 * self.cfg.sd_guidance_perp_neg # multiply by a negative value to control its magnitude
+            # text_embeddings_vd     = text_embeddings[0 * text_batch_size: 1 * text_batch_size].repeat_interleave(
+            #     view_batch_size // text_batch_size, dim = 0
+            # )
+            # text_embeddings_uncond = text_embeddings[1 * text_batch_size: 2 * text_batch_size].repeat_interleave(
+            #     view_batch_size // text_batch_size, dim = 0
+            # )
+            # text_embeddings_vd_neg = text_embeddings[2 * text_batch_size: 4 * text_batch_size].repeat_interleave(
+            #     view_batch_size // text_batch_size, dim = 0
+            # )
 
-            text_embeddings_vd     = text_embeddings[0 * text_batch_size: 1 * text_batch_size].repeat_interleave(
-                view_batch_size // text_batch_size, dim = 0
-            )
-            text_embeddings_uncond = text_embeddings[1 * text_batch_size: 2 * text_batch_size].repeat_interleave(
-                view_batch_size // text_batch_size, dim = 0
-            )
-            text_embeddings_vd_neg = text_embeddings[2 * text_batch_size: 4 * text_batch_size].repeat_interleave(
-                view_batch_size // text_batch_size, dim = 0
-            )
+            # text_embeddings = torch.cat(
+            #     [
+            #         text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 1st diffusion model
+            #         text_embeddings_uncond if not is_dual else text_embeddings_uncond.repeat(2, 1, 1),
+            #         text_embeddings_vd_neg if not is_dual else text_embeddings_vd_neg.repeat(2, 1, 1),
+            #         text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 2nd diffusion model
+            #     ],
+            #     dim=0
+            # )
 
-            text_embeddings = torch.cat(
-                [
-                    text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 1st diffusion model
-                    text_embeddings_uncond if not is_dual else text_embeddings_uncond.repeat(2, 1, 1),
-                    text_embeddings_vd_neg if not is_dual else text_embeddings_vd_neg.repeat(2, 1, 1),
-                    text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 2nd diffusion model
-                ],
-                dim=0
-            )
-
-            if is_dual: # repeat the neg_guidance_weights
-                neg_guidance_weights = neg_guidance_weights.repeat(2, 1)
+            # if is_dual: # repeat the neg_guidance_weights
+            #     neg_guidance_weights = neg_guidance_weights.repeat(2, 1)
 
         assert self.min_step is not None and self.max_step is not None
         with torch.no_grad():
@@ -733,7 +752,40 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             )
             return loss_asd, grad_norm
 
+    def _one_of_n_view(
+        self,
+        view_batch_size: int,
+        differ_from_idx: Optional[Float[Tensor, "B"]] = None
+    ):
 
+        if self.cfg.sd_view_dependent_prompting: 
+            # if view_dependent_prompting is enabled, we can select any view (azimuth: -180, 180) for the guidance
+            idx = torch.randint(
+                0, self.cfg.mv_n_view, 
+                (view_batch_size // self.cfg.mv_n_view, ), device=self.device, dtype=torch.long
+            )
+        else:
+            # otherwise, select the frontal view (azimuth: -90, 90) for the guidance
+            # because sd is more capable of handling the frontal view
+            assert self.cfg.mv_n_view % 4 == 0 # only support 4, 8, 12, 16, ...
+            left = self.cfg.mv_n_view // 4 * 1
+            right = self.cfg.mv_n_view // 4 * 2 + 1
+            idx = torch.randint(
+                left, right, 
+                (view_batch_size // self.cfg.mv_n_view, ), device=self.device, dtype=torch.long
+            )
+
+        # if differ_from_idx is not None, select the different view idx for the guidance
+        if differ_from_idx is not None:
+            orig_idx = (
+                differ_from_idx - # remove the added idx offset
+                torch.arange(0, view_batch_size, self.cfg.mv_n_view, device=self.device, dtype=torch.long)
+            )
+            offset = idx.clamp(min=1, max=self.cfg.mv_n_view - 1) # the offset should be in [1, n_view - 1]
+            idx = (orig_idx + offset) % self.cfg.mv_n_view
+
+        idx += torch.arange(0, view_batch_size, self.cfg.mv_n_view, device=self.device, dtype=torch.long)
+        return idx
 
 ################################################################################################
     def __call__(
@@ -797,25 +849,23 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             )
     
        ################################################################################################
+
         # due to the computation cost
         # the following is specific to Stable Diffusion
         # for any n_view, select only one view for the guidance
-        if self.cfg.sd_view_dependent_prompting: 
-            # if view_dependent_prompting is enabled, we can select any view (azimuth: -180, 180) for the guidance
-            idx = torch.randint(
-                0, self.cfg.mv_n_view, 
-                (rgb.shape[0] // self.cfg.mv_n_view, ), device=self.device, dtype=torch.long
-            )
-        else:
-            # otherwise, select the frontal view (azimuth: -90, 90) for the guidance
-            assert self.cfg.mv_n_view % 4 == 0 # only support 4, 8, 12, 16, ...
-            left = self.cfg.mv_n_view // 4 * 1
-            right = self.cfg.mv_n_view // 4 * 2 + 1
-            idx = torch.randint(
-                left, right, 
-                (rgb.shape[0] // self.cfg.mv_n_view, ), device=self.device, dtype=torch.long
-            )
-        idx += torch.arange(0, rgb.shape[0], self.cfg.mv_n_view, device=self.device, dtype=torch.long)
+        idx = self._one_of_n_view(
+            view_batch_size=rgb.shape[0]
+        )
+
+        # special case for dual rendering
+        if is_dual:
+            if self.cfg.dual_render_sync_view_sd: # select the same view for the 1st and 2nd renderings
+                idx_2nd = idx
+            else:                                 # select different views for the 1st and 2nd renderings
+                idx_2nd = self._one_of_n_view(
+                    view_batch_size=rgb_2nd.shape[0],
+                    differ_from_idx=idx
+                )
 
         # select only one view for the guidance
         if self.cfg.sd_weight > 0:
@@ -828,7 +878,8 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 c2w[idx],
                 rgb_as_latents=rgb_as_latents,
                 fovy=fovy,
-                rgb_2nd=rgb_2nd[idx] if rgb_2nd is not None else None,
+                rgb_2nd=rgb_2nd[idx_2nd] if is_dual else None,
+                azimuth_2nd=azimuth[idx_2nd] if is_dual else None, # mvdream's n_view only varies azimuth
                 **kwargs,
             )
         else:
