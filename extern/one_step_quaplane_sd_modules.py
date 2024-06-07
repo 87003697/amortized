@@ -120,7 +120,7 @@ class QuaplaneLoRAConv2dLayer(nn.Module):
     ):
         super().__init__()
 
-        assert locon_type in ["quadra_v1", "quadra_v2", "vanilla"], "The LoCON type is not supported."
+        assert locon_type in ["quadra_v1", "quadra_v2", "vanilla_v1", "vanilla_v2"], "The LoCON type is not supported."
         if locon_type == "quadra_v1":
             self.down_overhead = nn.Conv2d(in_features, rank, kernel_size=kernel_size, stride=stride, padding=padding, bias=False)
             self.down_side = nn.Conv2d(in_features, rank, kernel_size=kernel_size, stride=stride, padding=padding, bias=False)
@@ -149,10 +149,13 @@ class QuaplaneLoRAConv2dLayer(nn.Module):
             self.up_back = nn.Conv2d(rank, out_features, kernel_size=kernel_size, stride=stride, bias=with_bias)
             self.with_bias = with_bias
 
-        elif locon_type == "vanilla":
+        elif locon_type == "vanilla_v1":
             self.down = nn.Conv2d(in_features, rank, kernel_size=kernel_size, stride=stride, padding=padding, bias=False)
             self.up = nn.Conv2d(rank, out_features, kernel_size=(1, 1), stride=(1, 1), bias=with_bias)
 
+        elif locon_type == "vanilla_v2":
+            self.down = nn.Conv2d(in_features, rank, kernel_size=(1, 1), stride=(1, 1), padding=padding, bias=False)
+            self.up = nn.Conv2d(rank, out_features, kernel_size=kernel_size, stride=stride, bias=with_bias)
 
         self.network_alpha = network_alpha
         self.rank = rank
@@ -178,7 +181,7 @@ class QuaplaneLoRAConv2dLayer(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         orig_dtype = hidden_states.dtype
-        dtype = self.down_overhead.weight.dtype
+        dtype = self.down_overhead.weight.dtype if "quadra" in self.locon_type else self.down.weight.dtype
 
         if "quadra" in self.locon_type:
 
@@ -210,7 +213,7 @@ class QuaplaneLoRAConv2dLayer(nn.Module):
             up_hidden_states[2::4] = up_hidden_states_front    
             up_hidden_states[3::4] = up_hidden_states_back
 
-        elif self.locon_type == "vanilla":
+        elif "vanilla" in self.locon_type:
             down_hidden_states = self.down(hidden_states.to(dtype))
             up_hidden_states = self.up(down_hidden_states)
 
