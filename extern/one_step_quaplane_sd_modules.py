@@ -143,10 +143,10 @@ class QuaplaneLoRAConv2dLayer(nn.Module):
             self.down_front = nn.Conv2d(in_features, rank, kernel_size=(1, 1), stride=(1, 1), padding=padding, bias=False)
             self.down_back = nn.Conv2d(in_features, rank, kernel_size=(1, 1), stride=(1, 1), padding=padding, bias=False)
 
-            self.up_overhead = nn.Conv2d(rank, out_features, kernel_size=kernel_size, stride=stride, padding=padding, bias=with_bias)
-            self.up_side = nn.Conv2d(rank, out_features, kernel_size=kernel_size, stride=stride, padding=padding, bias=with_bias)
-            self.up_front = nn.Conv2d(rank, out_features, kernel_size=kernel_size, stride=stride, padding=padding, bias=with_bias)
-            self.up_back = nn.Conv2d(rank, out_features, kernel_size=kernel_size, stride=stride, padding=padding, bias=with_bias)
+            self.up_overhead = nn.Conv2d(rank, out_features, kernel_size=kernel_size, stride=stride, bias=with_bias)
+            self.up_side = nn.Conv2d(rank, out_features, kernel_size=kernel_size, stride=stride, bias=with_bias)
+            self.up_front = nn.Conv2d(rank, out_features, kernel_size=kernel_size, stride=stride, bias=with_bias)
+            self.up_back = nn.Conv2d(rank, out_features, kernel_size=kernel_size, stride=stride, bias=with_bias)
             self.with_bias = with_bias
 
         elif locon_type == "vanilla":
