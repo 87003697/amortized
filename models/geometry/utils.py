@@ -113,7 +113,7 @@ def sample_from_planes(plane_features, coordinates, mode='bilinear', padding_mod
 
     coordinates = (2/box_warp) * coordinates # add specific box bounds
 
-    projected_coordinates = project_onto_planes(quaplanes.to(coordinates), coordinates).unsqueeze(1)
+    projected_coordinates = project_onto_planes(planes.to(coordinates), coordinates).unsqueeze(1)
     output_features = torch.nn.functional.grid_sample(plane_features, projected_coordinates.float(), mode=mode, padding_mode=padding_mode, align_corners=False)
     output_features = output_features.permute(0, 3, 2, 1).reshape(N, n_planes, M, C)
     

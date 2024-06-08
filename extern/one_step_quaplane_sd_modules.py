@@ -116,7 +116,7 @@ class QuaplaneLoRAConv2dLayer(nn.Module):
         padding: Union[int, Tuple[int, int], str] = 0,
         network_alpha: Optional[float] = None,
         with_bias: bool = False,
-        locon_type: str = "quadra_v1", #quadra_v2, vanilla
+        locon_type: str = "quadra_v1", #quadra_v2, vanilla_v1, vanilla_v2
     ):
         super().__init__()
 
@@ -132,7 +132,6 @@ class QuaplaneLoRAConv2dLayer(nn.Module):
             self.up_side = nn.Conv2d(rank, out_features, kernel_size=(1, 1), stride=(1, 1), bias=with_bias)
             self.up_front = nn.Conv2d(rank, out_features, kernel_size=(1, 1), stride=(1, 1), bias=with_bias)
             self.up_back = nn.Conv2d(rank, out_features, kernel_size=(1, 1), stride=(1, 1), bias=with_bias)
-            self.with_bias = with_bias
 
             # This value has the same meaning as the `--network_alpha` option in the kohya-ss trainer script.
             # See https://github.com/darkstorm2150/sd-scripts/blob/main/docs/train_network_README-en.md#execute-learning
@@ -147,7 +146,6 @@ class QuaplaneLoRAConv2dLayer(nn.Module):
             self.up_side = nn.Conv2d(rank, out_features, kernel_size=kernel_size, stride=stride, bias=with_bias)
             self.up_front = nn.Conv2d(rank, out_features, kernel_size=kernel_size, stride=stride, bias=with_bias)
             self.up_back = nn.Conv2d(rank, out_features, kernel_size=kernel_size, stride=stride, bias=with_bias)
-            self.with_bias = with_bias
 
         elif locon_type == "vanilla_v1":
             self.down = nn.Conv2d(in_features, rank, kernel_size=kernel_size, stride=stride, padding=padding, bias=False)
