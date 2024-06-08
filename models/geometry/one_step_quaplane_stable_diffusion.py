@@ -62,6 +62,7 @@ class StableDiffusionQuaplaneAttention(BaseImplicitGeometry):
         # xz plane should looks that a img from right-left / left-right view
         # yz plane should looks that a img from front-back / back-front view
         rotate_planes: Optional[str] = None # "v1"
+        interpolate_feat: Optional[str] = None # "v1"
 
 
     def configure(self) -> None:
@@ -181,6 +182,7 @@ class StableDiffusionQuaplaneAttention(BaseImplicitGeometry):
             return sample_from_planes(
                 plane_features = space_cache_rotated,
                 coordinates = points,
+                interpolate_feat = self.cfg.interpolate_feat
             ).view(*points.shape[:-1],-1)
 
     def rescale_points(

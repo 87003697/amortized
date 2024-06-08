@@ -121,8 +121,10 @@ def sample_from_planes(plane_features, coordinates, mode='bilinear', padding_mod
     output_features = output_features.permute(0, 2, 1, 3).reshape(N, M, n_planes*C)
     return output_features.contiguous()
 
-def sample_from_quaplanes(plane_features, coordinates, mode='bilinear', padding_mode='zeros', box_warp=2):
+def sample_from_quaplanes(plane_features, coordinates, mode='bilinear', padding_mode='zeros', box_warp=2, interpolate_feat: Optional[str] = 'None'):
     assert padding_mode == 'zeros'
+    assert interpolate_feat in [None, "v1"]
+
     N, n_planes, C, H, W = plane_features.shape
     _, M, _ = coordinates.shape
     plane_features = plane_features.view(N*n_planes, C, H, W)
@@ -137,7 +139,6 @@ def sample_from_quaplanes(plane_features, coordinates, mode='bilinear', padding_
     output_features = output_features.permute(0, 2, 1, 3).reshape(N, M, n_planes*C)
     
     # decide whether to use front or back feature
-    mask = coordinates[..., 0] > 0 # front has x > 0, back has x < 0
     # front
     front_feat_idx = torch.cat(
         [
@@ -154,9 +155,16 @@ def sample_from_quaplanes(plane_features, coordinates, mode='bilinear', padding_
             torch.arange(3 * C, 4 * C)
         ]
     ).to(coordinates.device)
-    output_features_new = torch.zeros(N, M, (n_planes - 1) * C, device=coordinates.device)
-    output_features_new[mask]  = 1 * output_features[mask][..., front_feat_idx]# + 0 * output_features[mask][..., back_feat_idx]
-    output_features_new[~mask] = 1 * output_features[~mask][..., back_feat_idx]# + 0 * output_features[~mask][..., front_feat_idx]
+
+    if not interpolate_feat:
+        output_features_new = torch.zeros(N, M, (n_planes - 1) * C, device=coordinates.device)
+        mask = coordinates[..., 0] > 0 # front has x > 0, back has x < 0
+        output_features_new[mask]  = 1 * output_features[mask][..., front_feat_idx]# + 0 * output_features[mask][..., back_feat_idx]
+        output_features_new[~mask] = 1 * output_features[~mask][..., back_feat_idx]# + 0 * output_features[~mask][..., front_feat_idx]
+    else:
+        alpha_front = 0.5 + 0.5 * coordinates[..., :1] # front has alpha_front > 0.5, alpha_back < 0.5
+        alpha_back  = 0.5 - 0.5 * coordinates[..., :1] # back has alpha_back > 0.5, alpha_front < 0.5
+        output_features_new = alpha_front * output_features[..., front_feat_idx] + alpha_back * output_features[..., back_feat_idx]
 
     return output_features_new.contiguous()
 
