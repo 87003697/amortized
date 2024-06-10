@@ -62,7 +62,7 @@ class StableDiffusionQuaplaneAttention(BaseImplicitGeometry):
         # xz plane should looks that a img from right-left / left-right view
         # yz plane should looks that a img from front-back / back-front view
         rotate_planes: Optional[str] = None # "v1"
-        interpolate_feat: Optional[str] = None # "v1"
+        interpolate_feat: Optional[str] = None # "v1", "v2"
 
 
     def configure(self) -> None:
@@ -151,15 +151,16 @@ class StableDiffusionQuaplaneAttention(BaseImplicitGeometry):
         batch_size, n_points, n_dims = points.shape
         # the following code is similar to EG3D / OpenLRM
         
-        assert self.cfg.rotate_planes in [None, "v1"]
+        assert self.cfg.rotate_planes in [None, "v1", "v2"]
         if self.cfg.rotate_planes == None:
             return sample_from_planes(
                 plane_features = space_cache,
                 coordinates = points,
             ).view(*points.shape[:-1],-1)
-        
+    
+        space_cache_rotated = torch.zeros_like(space_cache)
+
         if self.cfg.rotate_planes == "v1":
-            space_cache_rotated = torch.zeros_like(space_cache)
             # xy plane - overhead view, diagonal-wise
             space_cache_rotated[:, 0::4] = torch.transpose(
                 space_cache[:, 0::4], 3, 4
@@ -178,13 +179,32 @@ class StableDiffusionQuaplaneAttention(BaseImplicitGeometry):
                     space_cache[:, 3::4], dims=(4,)
                 ), k=-1, dims=(3, 4)
             )
+        
+        elif self.cfg.rotate_planes == "v2":
+            # all are the same as v1, except for the zy plane - back view
+            # xy plane - overhead view, diagonal-wise
+            space_cache_rotated[:, 0::4] = torch.transpose(
+                space_cache[:, 0::4], 3, 4
+            )
+            # xz plane - side view, rotate 180° counterclockwise
+            space_cache_rotated[:, 1::4] = torch.rot90(
+                space_cache[:, 1::4], k=2, dims=(3, 4)
+            )
+            # zy plane - front view, rotate 90° clockwise
+            space_cache_rotated[:, 2::4] = torch.rot90(
+                space_cache[:, 2::4], k=-1, dims=(3, 4)
+            )
+            # zy plane - back view, rotate 90° clockwise, same as front view
+            space_cache_rotated[:, 3::4] = torch.rot90(
+                space_cache[:, 3::4], k=-1, dims=(3, 4)
+            )
 
-            return sample_from_planes(
-                plane_features = space_cache_rotated,
-                coordinates = points,
-                interpolate_feat = self.cfg.interpolate_feat
-            ).view(*points.shape[:-1],-1)
-
+        return sample_from_planes(
+            plane_features = space_cache_rotated,
+            coordinates = points,
+            interpolate_feat = self.cfg.interpolate_feat
+        ).view(*points.shape[:-1],-1)
+        
     def rescale_points(
         self,
         points: Float[Tensor, "*N Di"],
