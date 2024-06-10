@@ -304,18 +304,24 @@ class QuaplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             query = attn.to_q(hidden_states)
             _query_new = torch.zeros_like(query)
             # lora for overhead plane
-            _query_new[0::4] = query[0::4] + scale * self.to_q_overhead_lora(hidden_states[0::4])
+            _query_new[0::4] = self.to_q_overhead_lora(hidden_states[0::4])
             # lora for side plane
-            _query_new[1::4] = query[1::4] + scale * self.to_q_side_lora(hidden_states[1::4])
+            _query_new[1::4] = self.to_q_side_lora(hidden_states[1::4])
             # lora for front plane
-            _query_new[2::4] = query[2::4] + scale * self.to_q_front_lora(hidden_states[2::4])
+            _query_new[2::4] = self.to_q_front_lora(hidden_states[2::4])
             # lora for back plane
-            _query_new[3::4] = query[3::4] + scale * self.to_q_back_lora(hidden_states[3::4])
-            query = _query_new
+            _query_new[3::4] = self.to_q_back_lora(hidden_states[3::4])
+            query = query + scale * _query_new
         elif self.lora_type == "vanilla":
             query = attn.to_q(hidden_states) + scale * self.to_q_lora(hidden_states)
 
-        query = attn.head_to_batch_dim(query)
+        query = attn.head_to_batch_dim(
+            query.view(batch_size // 4, sequence_length * 4, self.hidden_size)
+            # torch.cat(
+            #     [query[0::4], query[1::4], query[2::4], query[3::4],],
+            #     dim=1
+            # )
+        )
         ############################################################################################################
 
         if encoder_hidden_states is None:
@@ -329,64 +335,68 @@ class QuaplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             key = attn.to_k(encoder_hidden_states)
             _key_new = torch.zeros_like(key)
             # lora for overhead plane
-            _key_new[0::4] = key[0::4] + scale * self.to_k_overhead_lora(encoder_hidden_states[0::4])
+            _key_new[0::4] = self.to_k_overhead_lora(encoder_hidden_states[0::4])
             # lora for side plane
-            _key_new[1::4] = key[1::4] + scale * self.to_k_side_lora(encoder_hidden_states[1::4])
+            _key_new[1::4] = self.to_k_side_lora(encoder_hidden_states[1::4])
             # lora for front plane
-            _key_new[2::4] = key[2::4] + scale * self.to_k_front_lora(encoder_hidden_states[2::4])
+            _key_new[2::4] = self.to_k_front_lora(encoder_hidden_states[2::4])
             # lora for back plane
-            _key_new[3::4] = key[3::4] + scale * self.to_k_back_lora(encoder_hidden_states[3::4])
-            key = _key_new
+            _key_new[3::4] = self.to_k_back_lora(encoder_hidden_states[3::4])
+            key = key + scale * _key_new
 
             value = attn.to_v(encoder_hidden_states)
             _value_new = torch.zeros_like(value)
             # lora for overhead plane
-            _value_new[0::4] = value[0::4] + scale * self.to_v_overhead_lora(encoder_hidden_states[0::4])
+            _value_new[0::4] = self.to_v_overhead_lora(encoder_hidden_states[0::4])
             # lora for side plane
-            _value_new[1::4] = value[1::4] + scale * self.to_v_side_lora(encoder_hidden_states[1::4])
+            _value_new[1::4] = self.to_v_side_lora(encoder_hidden_states[1::4])
             # lora for front plane
-            _value_new[2::4] = value[2::4] + scale * self.to_v_front_lora(encoder_hidden_states[2::4])
+            _value_new[2::4] = self.to_v_front_lora(encoder_hidden_states[2::4])
             # lora for back plane
-            _value_new[3::4] = value[3::4] + scale * self.to_v_back_lora(encoder_hidden_states[3::4])
-            value = _value_new
+            _value_new[3::4] = self.to_v_back_lora(encoder_hidden_states[3::4])
+            value = value + scale * _value_new
         elif self.lora_type == "vanilla":
             key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(encoder_hidden_states)
             value = attn.to_v(encoder_hidden_states) + scale * self.to_v_lora(encoder_hidden_states)
 
         # in self-attention, query of each plane should be used to calculate the attention scores of all planes
         key = attn.head_to_batch_dim(
-            torch.cat(
-                [key[0::4], key[1::4], key[2::4], key[3::4]], 
-                dim=1
-            ).repeat_interleave(4, dim=0)
+            key.view(batch_size // 4, sequence_length * 4, self.hidden_size)
+            # torch.cat(
+            #     [key[0::4], key[1::4], key[2::4], key[3::4]], 
+            #     dim=1
+            # )
         )
         value = attn.head_to_batch_dim(
-            torch.cat(
-                [value[0::4], value[1::4], value[2::4], value[3::4]],
-                dim=1
-            ).repeat_interleave(4, dim=0)
+            value.view(batch_size // 4, sequence_length * 4, self.hidden_size)
+            # torch.cat(
+            #     [value[0::4], value[1::4], value[2::4], value[3::4]],
+            #     dim=1
+            # )
         )
         ############################################################################################################
-        
+
         attention_probs = attn.get_attention_scores(query, key, attention_mask)
         hidden_states = torch.bmm(attention_probs, value)
         hidden_states = attn.batch_to_head_dim(hidden_states)
+        # split the hidden states into 4 planes
+        hidden_states = hidden_states.view(batch_size // 4 * 4, sequence_length, self.hidden_size)
 
-        ############################################################################################################
+        ############################################################################################################        
         # linear proj
         if "quadra" in self.lora_type:
             # linear proj
             hidden_states = attn.to_out[0](hidden_states)
             _hidden_states_new = torch.zeros_like(hidden_states)
             # lora for overhead plane
-            _hidden_states_new[0::4] = hidden_states[0::4] + scale * self.to_out_overhead_lora(hidden_states[0::4])
+            _hidden_states_new[0::4] = self.to_out_overhead_lora(hidden_states[0::4])
             # lora for side plane
-            _hidden_states_new[1::4] = hidden_states[1::4] + scale * self.to_out_side_lora(hidden_states[1::4])
+            _hidden_states_new[1::4] = self.to_out_side_lora(hidden_states[1::4])
             # lora for front plane
-            _hidden_states_new[2::4] = hidden_states[2::4] + scale * self.to_out_front_lora(hidden_states[2::4])
+            _hidden_states_new[2::4] = self.to_out_front_lora(hidden_states[2::4])
             # lora for back plane
-            _hidden_states_new[3::4] = hidden_states[3::4] + scale * self.to_out_back_lora(hidden_states[3::4])
-            hidden_states = _hidden_states_new
+            _hidden_states_new[3::4] = self.to_out_back_lora(hidden_states[3::4])
+            hidden_states = hidden_states + scale * _hidden_states_new
         elif self.lora_type == "vanilla":
             hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(hidden_states)
 
@@ -489,14 +499,14 @@ class QuaplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             query = attn.to_q(hidden_states)
             _query_new = torch.zeros_like(query)        
             # lora for overhead plane
-            _query_new[0::4] = query[0::4] + scale * self.to_q_overhead_lora(hidden_states[0::4])
+            _query_new[0::4] = self.to_q_overhead_lora(hidden_states[0::4])
             # lora for side plane
-            _query_new[1::4] = query[1::4] + scale * self.to_q_side_lora(hidden_states[1::4])
+            _query_new[1::4] = self.to_q_side_lora(hidden_states[1::4])
             # lora for front plane
-            _query_new[2::4] = query[2::4] + scale * self.to_q_front_lora(hidden_states[2::4])
+            _query_new[2::4] = self.to_q_front_lora(hidden_states[2::4])
             # lora for back plane
-            _query_new[3::4] = query[3::4] + scale * self.to_q_back_lora(hidden_states[3::4])
-            query = _query_new
+            _query_new[3::4] = self.to_q_back_lora(hidden_states[3::4])
+            query = query + scale * _query_new
         elif self.lora_type == "vanilla":
             query = attn.to_q(hidden_states) + scale * self.to_q_lora(hidden_states)
 
@@ -514,26 +524,26 @@ class QuaplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             key = attn.to_k(encoder_hidden_states)
             _key_new = torch.zeros_like(key)
             # lora for overhead plane
-            _key_new[0::4] = key[0::4] + scale * self.to_k_overhead_lora(encoder_hidden_states[0::4])
+            _key_new[0::4] = self.to_k_overhead_lora(encoder_hidden_states[0::4])
             # lora for side plane
-            _key_new[1::4] = key[1::4] + scale * self.to_k_side_lora(encoder_hidden_states[1::4])
+            _key_new[1::4] = self.to_k_side_lora(encoder_hidden_states[1::4])
             # lora for front plane
-            _key_new[2::4] = key[2::4] + scale * self.to_k_front_lora(encoder_hidden_states[2::4])
+            _key_new[2::4] = self.to_k_front_lora(encoder_hidden_states[2::4])
             # lora for back plane
-            _key_new[3::4] = key[3::4] + scale * self.to_k_back_lora(encoder_hidden_states[3::4])
-            key = _key_new
+            _key_new[3::4] = self.to_k_back_lora(encoder_hidden_states[3::4])
+            key = key + scale * _key_new
 
             value = attn.to_v(encoder_hidden_states)
             _value_new = torch.zeros_like(value)
             # lora for overhead plane
-            _value_new[0::4] = value[0::4] + scale * self.to_v_overhead_lora(encoder_hidden_states[0::4])
+            _value_new[0::4] = self.to_v_overhead_lora(encoder_hidden_states[0::4])
             # lora for side plane
-            _value_new[1::4] = value[1::4] + scale * self.to_v_side_lora(encoder_hidden_states[1::4])
+            _value_new[1::4] = self.to_v_side_lora(encoder_hidden_states[1::4])
             # lora for front plane
-            _value_new[2::4] = value[2::4] + scale * self.to_v_front_lora(encoder_hidden_states[2::4])
+            _value_new[2::4] = self.to_v_front_lora(encoder_hidden_states[2::4])
             # lora for back plane
-            _value_new[3::4] = value[3::4] + scale * self.to_v_back_lora(encoder_hidden_states[3::4])
-            value = _value_new
+            _value_new[3::4] = self.to_v_back_lora(encoder_hidden_states[3::4])
+            value = value + scale * _value_new
 
         elif self.lora_type == "vanilla":
             key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(encoder_hidden_states)
@@ -553,14 +563,14 @@ class QuaplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             hidden_states = attn.to_out[0](hidden_states)
             _hidden_states_new = torch.zeros_like(hidden_states)
             # lora for overhead plane
-            _hidden_states_new[0::4] = hidden_states[0::4] + scale * self.to_out_overhead_lora(hidden_states[0::4])
+            _hidden_states_new[0::4] = self.to_out_overhead_lora(hidden_states[0::4])
             # lora for side plane
-            _hidden_states_new[1::4] = hidden_states[1::4] + scale * self.to_out_side_lora(hidden_states[1::4])
+            _hidden_states_new[1::4] = self.to_out_side_lora(hidden_states[1::4])
             # lora for front plane
-            _hidden_states_new[2::4] = hidden_states[2::4] + scale * self.to_out_front_lora(hidden_states[2::4])
+            _hidden_states_new[2::4] = self.to_out_front_lora(hidden_states[2::4])
             # lora for back plane
-            _hidden_states_new[3::4] = hidden_states[3::4] + scale * self.to_out_back_lora(hidden_states[3::4])
-            hidden_states = _hidden_states_new
+            _hidden_states_new[3::4] = self.to_out_back_lora(hidden_states[3::4])
+            hidden_states = hidden_states + scale * _hidden_states_new
         elif self.lora_type == "vanilla":
             hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(hidden_states)
 
