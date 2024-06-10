@@ -590,7 +590,8 @@ class OneStepQuaplaneStableDiffusion(BaseModule):
         timestep: int = 999,
         output_dim: int = 32,
         gradient_checkpoint: bool = False
-        lora_type: str = "quadra_v1"
+        self_lora_type: str = "quadra_v1"
+        cross_lora_type: str = "quadra_v1"
         locon_type: str = "quadra_v1"
 
     cfg: Config
@@ -644,8 +645,13 @@ class OneStepQuaplaneStableDiffusion(BaseModule):
  
         if "lora" in training_type:
             # parse the rank from the training type, with the template "lora_rank_{}"
-            rank = re.search(r"lora_rank_(\d+)", training_type).group(1)
-            self.lora_rank = int(rank)
+            assert "self_lora_rank" in training_type, "The self_lora_rank is not specified."
+            rank = re.search(r"self_lora_rank_(\d+)", training_type).group(1)
+            self.self_lora_rank = int(rank)
+
+            assert "cross_lora_rank" in training_type, "The cross_lora_rank is not specified."
+            rank = re.search(r"cross_lora_rank_(\d+)", training_type).group(1)
+            self.cross_lora_rank = int(rank)
 
             # if the finetuning is with bias
             self.w_lora_bias = False
@@ -776,15 +782,15 @@ class OneStepQuaplaneStableDiffusion(BaseModule):
                 # it is self-attention
                 cross_attention_dim = None
                 lora_attn_procs[name] = self_attn_procs(
-                    hidden_size, self.lora_rank, with_bias = self.w_lora_bias,
-                    lora_type = self.cfg.lora_type
+                    hidden_size, self.self_lora_rank, with_bias = self.w_lora_bias,
+                    lora_type = self.cfg.self_lora_type
                 )
             else:
                 # it is cross-attention
                 cross_attention_dim = module.config.cross_attention_dim
                 lora_attn_procs[name] = cross_attn_procs(
-                    hidden_size, cross_attention_dim, self.lora_rank, with_bias = self.w_lora_bias,
-                    lora_type = self.cfg.lora_type
+                    hidden_size, cross_attention_dim, self.cross_lora_rank, with_bias = self.w_lora_bias,
+                    lora_type = self.cfg.cross_lora_type
                 )
         return lora_attn_procs
 

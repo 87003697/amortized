@@ -28,7 +28,8 @@ class StableDiffusionQuaplaneAttention(BaseImplicitGeometry):
                 "training_type": "lora",
                 "output_dim": 32,
                 "gradient_checkpoint": False,
-                "lora_type": "quadra_v1",
+                "self_lora_type": "quadra_v1",
+                "cross_lora_type": "quadra_v1",
                 "locon_type": "quadra_v1",
             }
         )
