@@ -157,6 +157,7 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
                     space_cache=space_cache,   
                     noise=noise,
                     text_embed=text_embed,
+                    text_embed_bg = kwargs.pop("text_embed_bg", None)
                 )
                 out = chunk_batch_original(
                     func,
@@ -363,7 +364,7 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
                     self.background, 
                     self.cfg.eval_chunk_size, # since we donnot change the module here, we can use eval_chunk_size
                     dirs=rays_d,
-                    text_embed=text_embed,
+                    text_embed=text_embed if "text_embed_bg" not in kwargs else kwargs["text_embed_bg"]
                 )
             else:
                 comp_rgb_bg = chunk_batch(
