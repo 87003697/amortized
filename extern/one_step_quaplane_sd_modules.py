@@ -231,17 +231,17 @@ class QuaplaneSelfAttentionLoRAAttnProcessor(nn.Module):
         rank: int = 4,
         network_alpha: Optional[float] = None,
         with_bias: bool = False,
-        lora_type: str = "quadra_v1", # vanilla, 
+        lora_type: str = "quadra_v1", # vanilla,"sparse_v1"
     ):
         super().__init__()
 
-        assert lora_type in ["quadra_v1", "vanilla"], "The LoRA type is not supported."
+        assert lora_type in ["quadra_v1", "vanilla", "sparse_v1"], "The LoRA type is not supported."
 
         self.hidden_size = hidden_size
         self.rank = rank
         self.lora_type = lora_type
 
-        if lora_type == "quadra_v1":
+        if lora_type in ["quadra_v1"]:
             # lora for overehead plane
             self.to_q_overhead_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_k_overhead_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
@@ -266,12 +266,25 @@ class QuaplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             self.to_v_back_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_out_back_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
 
-        elif lora_type == "vanilla":
+        elif lora_type in ["vanilla"]:
             # lora for all planes
             self.to_q_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_k_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_v_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_out_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+
+        elif lora_type in ["sparse_v1"]:
+            # to_k, to_v, to_out for all planes
+            self.to_k_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_v_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_out_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+
+            # to_q for each plane
+            self.to_q_overhead_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_q_side_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_q_front_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_q_back_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+
 
     def __call__(
         self, attn: Attention, hidden_states, encoder_hidden_states=None, attention_mask=None, scale=1.0, temb=None
@@ -300,7 +313,7 @@ class QuaplaneSelfAttentionLoRAAttnProcessor(nn.Module):
 
         ############################################################################################################
         # query
-        if "quadra" in self.lora_type:
+        if self.lora_type in ["quadra_v1", "sparse_v1"]:
             query = attn.to_q(hidden_states)
             _query_new = torch.zeros_like(query)
             # lora for overhead plane
@@ -312,16 +325,11 @@ class QuaplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             # lora for back plane
             _query_new[3::4] = self.to_q_back_lora(hidden_states[3::4])
             query = query + scale * _query_new
-        elif self.lora_type == "vanilla":
+        elif self.lora_type in ["vanilla"]:
             query = attn.to_q(hidden_states) + scale * self.to_q_lora(hidden_states)
+        else:
+            raise NotImplementedError("The LoRA type is not supported for the query in QuaplaneSelfAttentionLoRAAttnProcessor.")
 
-        query = attn.head_to_batch_dim(
-            query.view(batch_size // 4, sequence_length * 4, self.hidden_size)
-            # torch.cat(
-            #     [query[0::4], query[1::4], query[2::4], query[3::4],],
-            #     dim=1
-            # )
-        )
         ############################################################################################################
 
         if encoder_hidden_states is None:
@@ -331,7 +339,7 @@ class QuaplaneSelfAttentionLoRAAttnProcessor(nn.Module):
 
         ############################################################################################################
         # key and value
-        if "quadra" in self.lora_type:
+        if self.lora_type in ["quadra_v1"]:
             key = attn.to_k(encoder_hidden_states)
             _key_new = torch.zeros_like(key)
             # lora for overhead plane
@@ -355,36 +363,66 @@ class QuaplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             # lora for back plane
             _value_new[3::4] = self.to_v_back_lora(encoder_hidden_states[3::4])
             value = value + scale * _value_new
-        elif self.lora_type == "vanilla":
+        elif self.lora_type in ["vanilla", "sparse_v1"]:
             key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(encoder_hidden_states)
             value = attn.to_v(encoder_hidden_states) + scale * self.to_v_lora(encoder_hidden_states)
+        else:
+            raise NotImplementedError("The LoRA type is not supported for the key and value in QuaplaneSelfAttentionLoRAAttnProcessor.")
+
+        ############################################################################################################
+        # attention scores
 
         # in self-attention, query of each plane should be used to calculate the attention scores of all planes
-        key = attn.head_to_batch_dim(
-            key.view(batch_size // 4, sequence_length * 4, self.hidden_size)
-            # torch.cat(
-            #     [key[0::4], key[1::4], key[2::4], key[3::4]], 
-            #     dim=1
-            # )
-        )
-        value = attn.head_to_batch_dim(
-            value.view(batch_size // 4, sequence_length * 4, self.hidden_size)
-            # torch.cat(
-            #     [value[0::4], value[1::4], value[2::4], value[3::4]],
-            #     dim=1
-            # )
-        )
-        ############################################################################################################
+        if self.lora_type in ["quadra_v1", "vanilla"]:   
+            query = attn.head_to_batch_dim(
+                query.view(batch_size // 4, sequence_length * 4, self.hidden_size)
+            ) 
+            key = attn.head_to_batch_dim(
+                key.view(batch_size // 4, sequence_length * 4, self.hidden_size)
+            )
+            value = attn.head_to_batch_dim(
+                value.view(batch_size // 4, sequence_length * 4, self.hidden_size)
+            )
+            # calculate the attention scores
+            attention_probs = attn.get_attention_scores(query, key, attention_mask)
+            hidden_states = torch.bmm(attention_probs, value)
+            hidden_states = attn.batch_to_head_dim(hidden_states)
+            # split the hidden states into 4 planes
+            hidden_states = hidden_states.view(batch_size // 4 * 4, sequence_length, self.hidden_size)
 
-        attention_probs = attn.get_attention_scores(query, key, attention_mask)
-        hidden_states = torch.bmm(attention_probs, value)
-        hidden_states = attn.batch_to_head_dim(hidden_states)
-        # split the hidden states into 4 planes
-        hidden_states = hidden_states.view(batch_size // 4 * 4, sequence_length, self.hidden_size)
+        elif self.lora_type in ["sparse_v1"]:
+            query = attn.head_to_batch_dim(
+                query
+            )
+            # append other view of planes to the key
+            _key_append = torch.zeros_like(key)
+            _key_append[0::4] = key[1::4] # overhead view is appended with side view
+            _key_append[1::4] = key[2::4] # side view is appended with front view
+            _key_append[2::4] = key[1::4] # front view is appended with side view
+            _key_append[3::4] = key[1::4] # side view is appended with back view
+            key = attn.head_to_batch_dim(
+                torch.cat([key, _key_append], dim=1)
+            )
+            # append other view of planes to the value
+            _value_append = torch.zeros_like(value)
+            _value_append[0::4] = value[1::4] # overhead view is appended with side view
+            _value_append[1::4] = value[2::4] # side view is appended with front view
+            _value_append[2::4] = value[1::4] # front view is appended with side view
+            _value_append[3::4] = value[1::4] # side view is appended with back view
+            value = attn.head_to_batch_dim(
+                torch.cat([value, _value_append], dim=1)
+            )
+            # calculate the attention scores
+            attention_probs = attn.get_attention_scores(query, key, attention_mask)
+            hidden_states = torch.bmm(attention_probs, value)
+            hidden_states = attn.batch_to_head_dim(hidden_states)
+
+        else:
+            raise NotImplementedError("The LoRA type is not supported for attention scores calculation in QuaplaneSelfAttentionLoRAAttnProcessor.")
 
         ############################################################################################################        
         # linear proj
-        if "quadra" in self.lora_type:
+        if self.lora_type in ["quadra_v1"]:
             # linear proj
             hidden_states = attn.to_out[0](hidden_states)
             _hidden_states_new = torch.zeros_like(hidden_states)
@@ -397,8 +435,10 @@ class QuaplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             # lora for back plane
             _hidden_states_new[3::4] = self.to_out_back_lora(hidden_states[3::4])
             hidden_states = hidden_states + scale * _hidden_states_new
-        elif self.lora_type == "vanilla":
+        elif self.lora_type in ["vanilla", "sparse_v1"]:
             hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(hidden_states)
+        else:
+            raise NotImplementedError("The LoRA type is not supported for the to_out layer in QuaplaneSelfAttentionLoRAAttnProcessor.")
 
         # dropout
         hidden_states = attn.to_out[1](hidden_states)
@@ -436,7 +476,7 @@ class QuaplaneCrossAttentionLoRAAttnProcessor(nn.Module):
         self.rank = rank
         self.lora_type = lora_type
 
-        if lora_type == "quadra_v1":
+        if lora_type in ["quadra_v1"]:
             # lora for overhead plane
             self.to_q_overhead_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_k_overhead_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
@@ -461,7 +501,7 @@ class QuaplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             self.to_v_back_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_out_back_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
 
-        elif lora_type == "vanilla":
+        elif lora_type in ["vanilla"]:
             # lora for all planes
             self.to_q_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_k_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
@@ -495,7 +535,7 @@ class QuaplaneCrossAttentionLoRAAttnProcessor(nn.Module):
 
         ############################################################################################################
         # query
-        if "quadra" in self.lora_type:
+        if self.lora_type in ["quadra_v1"]:
             query = attn.to_q(hidden_states)
             _query_new = torch.zeros_like(query)        
             # lora for overhead plane
@@ -507,8 +547,10 @@ class QuaplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             # lora for back plane
             _query_new[3::4] = self.to_q_back_lora(hidden_states[3::4])
             query = query + scale * _query_new
-        elif self.lora_type == "vanilla":
+        elif self.lora_type in ["vanilla"]:
             query = attn.to_q(hidden_states) + scale * self.to_q_lora(hidden_states)
+        else:
+            raise NotImplementedError("The LoRA type is not supported for the query in QuaplaneCrossAttentionLoRAAttnProcessor.")
 
         query = attn.head_to_batch_dim(query)
         ############################################################################################################
@@ -520,7 +562,7 @@ class QuaplaneCrossAttentionLoRAAttnProcessor(nn.Module):
 
         ############################################################################################################
         # key and value
-        if "quadra" in self.lora_type:
+        if self.lora_type in ["quadra_v1"]:
             key = attn.to_k(encoder_hidden_states)
             _key_new = torch.zeros_like(key)
             # lora for overhead plane
@@ -545,9 +587,13 @@ class QuaplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             _value_new[3::4] = self.to_v_back_lora(encoder_hidden_states[3::4])
             value = value + scale * _value_new
 
-        elif self.lora_type == "vanilla":
+        elif self.lora_type in ["vanilla"]:
             key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(encoder_hidden_states)
             value = attn.to_v(encoder_hidden_states) + scale * self.to_v_lora(encoder_hidden_states)
+        
+        else:
+            raise NotImplementedError("The LoRA type is not supported for the key and value in QuaplaneCrossAttentionLoRAAttnProcessor.")
+
 
         key = attn.head_to_batch_dim(key)
         value = attn.head_to_batch_dim(value)
@@ -559,7 +605,7 @@ class QuaplaneCrossAttentionLoRAAttnProcessor(nn.Module):
 
         ############################################################################################################
         # linear proj
-        if "quadra" in self.lora_type:
+        if self.lora_type in ["quadra_v1"]:
             hidden_states = attn.to_out[0](hidden_states)
             _hidden_states_new = torch.zeros_like(hidden_states)
             # lora for overhead plane
@@ -571,8 +617,10 @@ class QuaplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             # lora for back plane
             _hidden_states_new[3::4] = self.to_out_back_lora(hidden_states[3::4])
             hidden_states = hidden_states + scale * _hidden_states_new
-        elif self.lora_type == "vanilla":
+        elif self.lora_type in ["vanilla"]:
             hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(hidden_states)
+        else:
+            raise NotImplementedError("The LoRA type is not supported for the to_out layer in QuaplaneCrossAttentionLoRAAttnProcessor.")
 
         # dropout
         hidden_states = attn.to_out[1](hidden_states)
