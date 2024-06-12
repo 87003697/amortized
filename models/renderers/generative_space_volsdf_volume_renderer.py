@@ -332,7 +332,10 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
 
             # background
             if hasattr(self.background, "enabling_hypernet") and self.background.enabling_hypernet:
-                comp_rgb_bg = self.background(dirs=rays_d, text_embed=text_embed)
+                comp_rgb_bg = self.background(
+                    dirs=rays_d, 
+                    text_embed=text_embed if "text_embed_bg" not in kwargs else kwargs["text_embed_bg"]
+                )
             else:
                 comp_rgb_bg = self.background(dirs=rays_d)
         else:

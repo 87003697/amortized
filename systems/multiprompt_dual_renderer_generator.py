@@ -114,17 +114,22 @@ class MultipromptDualRendererGeneratorSystem(BaseLift3DSystem):
             # for the case of interpolation
             self.prompt_utils_target = self.prompt_processor(prompt = batch["prompt_target"])
             ratio = batch["ratio"]
-            batch["text_embed"] = ratio * self.prompt_utils.get_global_text_embeddings() + (1 - ratio) * self.prompt_utils_target.get_global_text_embeddings()
+            batch["text_embed"] = ratio * self.prompt_utils.get_global_text_embeddings() + \
+                             (1 - ratio) * self.prompt_utils_target.get_global_text_embeddings()
+            batch["text_embed_bg"] = ratio * self.prompt_utils.get_global_text_embeddings(use_local_text_embeddings = False) + \
+                             (1 - ratio) * self.prompt_utils_target.get_global_text_embeddings(use_local_text_embeddings = False)
         else:
             # more general case
             batch["text_embed"] = self.prompt_utils.get_global_text_embeddings()
+            batch["text_embed_bg"] = self.prompt_utils.get_global_text_embeddings(use_local_text_embeddings = False)
     
-
         # forward pass
         batch['space_cache'] = self.geometry.generate_space_cache(
             styles = batch['noise'],
             text_embed = batch['text_embed'],
         )
+
+
         if self.cfg.stage == "geometry":
             render_out = self.renderer(**batch, render_rgb=False)
             render_out_2nd = self.renderer_2nd(**batch, render_rgb=False)

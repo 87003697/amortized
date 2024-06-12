@@ -483,8 +483,13 @@ class MultiPromptProcessorOutput:
 
     def get_global_text_embeddings(
         self,
+        use_local_text_embeddings: Optional[bool] = None,
     ):
-        if self.use_local_text_embeddings:
+
+        if use_local_text_embeddings is None:
+            use_local_text_embeddings = self.use_local_text_embeddings
+
+        if use_local_text_embeddings:
             if not self.use_view_dependent_text_embeddings:
                 return torch.stack(self.local_text_embeddings, dim=0).to(self.device)
             else:
@@ -505,10 +510,12 @@ class MultiPromptProcessorOutput:
                     )
                 return torch.stack(feature_list_batch, dim=0).to(self.device)
         else:
-            if not self.use_view_dependent_text_embeddings:
-                return torch.stack(self.global_text_embeddings, dim=0).to(self.device)
-            else:
-                raise NotImplementedError("View-dependent text embeddings are not supported yet.")
+            return torch.stack(self.global_text_embeddings, dim=0).to(self.device)
+        
+            # if not self.use_view_dependent_text_embeddings:
+            #     return torch.stack(self.global_text_embeddings, dim=0).to(self.device)
+            # else:
+            #     raise NotImplementedError("View-dependent text embeddings are not supported yet.")
 
     def get_text_embeddings(
         self, 

@@ -205,7 +205,15 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 gb_rgb_fg = torch.zeros(num_views_per_batch, height, width, 3).to(rgb_fg)
                 gb_rgb_fg[selector] = rgb_fg
 
-                gb_rgb_bg = self.background(dirs=gb_viewdirs)
+                # background
+                if hasattr(self.background, "enabling_hypernet") and self.background.enabling_hypernet:
+                    gb_rgb_bg = self.background(
+                        dirs=gb_viewdirs, 
+                        text_embed=text_embed if "text_embed_bg" not in kwargs else kwargs["text_embed_bg"]
+                    )
+                else:
+                    gb_rgb_bg = self.background(dirs=gb_viewdirs)
+
                 gb_rgb = torch.lerp(gb_rgb_bg, gb_rgb_fg, mask.float())
                 gb_rgb_aa = self.ctx.antialias(gb_rgb, rast, v_pos_clip, mesh.t_pos_idx)
 
@@ -304,6 +312,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             if self.cfg.isosurface_remove_outliers:
                 mesh = mesh.remove_outlier(self.cfg.isosurface_outlier_n_faces_threshold)
             mesh_list.append(mesh)
+            
         return mesh_list
 
 
