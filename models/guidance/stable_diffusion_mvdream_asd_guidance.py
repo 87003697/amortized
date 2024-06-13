@@ -42,18 +42,19 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         mv_camera_condition_type: str = "rotation"
         mv_view_dependent_prompting: bool = False
         mv_image_size: int = 256
+        mv_guidance_scale: float = 7.5
 
         # the following is specific to stable diffusion
         sd_view_dependent_prompting: bool = True
         sd_image_size: int = 512
         sd_guidance_perp_neg: float = 0.0
+        sd_guidance_scale: float = 7.5
 
         # the following is shared between mvdream and stable diffusion
         grad_clip: Optional[
             Any
         ] = None  # field(default_factory=lambda: [0, 2.0, 8.0, 1000])
         half_precision_weights: bool = True
-        guidance_scale: float = 7.5
 
         # the following is specific to ASD
         min_step_percent: float = 0.02
@@ -63,6 +64,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
         plus_ratio: float = 0.1
         plus_random: bool = True
+        plus_schedule: str = "linear"  # linear or sqrt_<bias>
 
         # the following is specific to the combination of MVDream and Stable Diffusion
         sd_weight: float = 1.
@@ -141,12 +143,28 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         self.num_train_timesteps = 1000
         self.set_min_max_steps()  # set to default value
 
+
     def get_t_plus(
         self, 
         t: Float[Tensor, "B"]
     ):
+        # determine the timestamp for the second diffusion model
+        if self.cfg.plus_schedule == "linear":
+            t_plus = self.cfg.plus_ratio * (t - self.min_step)
+        
+        elif self.cfg.plus_schedule.startswith("sqrt"):
+            bias = 0
+            if self.cfg.plus_schedule.startswith("sqrt_"): # if bias is specified
+                try:
+                    bias = float(self.cfg.plus_schedule.split("_")[1])
+                except:
+                    raise ValueError(f"Invalid sqrt bias: {self.cfg.plus_schedule}")
+                
+            t_plus = torch.sqrt(t - self.min_step + bias)
+        
+        else:
+            raise ValueError(f"Invalid plus_schedule: {self.cfg.plus_schedule}")
 
-        t_plus = self.cfg.plus_ratio * (t - self.min_step)
         if self.cfg.plus_random:
             t_plus = (t_plus * torch.rand(*t.shape,device = self.device)).to(torch.long)
         else:
@@ -154,8 +172,8 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         t_plus = t + t_plus
         t_plus = torch.clamp(
             t_plus,
-            1, # T_min
-            self.num_train_timesteps - 1, # T_max
+            1, # T_min = 1
+            max = self.num_train_timesteps - 1, # T_max = 999
         )
         return t_plus
 
@@ -435,10 +453,10 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 ) * perpendicular_component(eps_vd_neg, eps_pos) # eps_vd_neg # v2
 
             # noise_pred_p = (eps_pos) * guidenace_scale + noise_pred_uncond + accum_grad
-            noise_pred_first = (eps_pos + accum_grad) * self.cfg.guidance_scale + noise_pred_uncond 
+            noise_pred_first = (eps_pos + accum_grad) * self.cfg.sd_guidance_scale + noise_pred_uncond 
 
         else: # if not use_perp_neg
-            noise_pred_first = eps_pos                * self.cfg.guidance_scale + noise_pred_uncond
+            noise_pred_first = eps_pos                * self.cfg.sd_guidance_scale + noise_pred_uncond
 
         grad = (noise_pred_first - noise_pred_second) * w
         grad = torch.nan_to_num(grad)
@@ -718,7 +736,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         noise_pred_text, noise_pred_uncond, noise_pred_text_second = noise_pred.chunk(
             3
         )
-        noise_pred_first = noise_pred_uncond + self.cfg.guidance_scale * (
+        noise_pred_first = noise_pred_uncond + self.cfg.mv_guidance_scale * (
             noise_pred_text - noise_pred_uncond
         )
         noise_pred_second = noise_pred_text_second
