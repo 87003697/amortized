@@ -43,12 +43,14 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         mv_view_dependent_prompting: bool = False
         mv_image_size: int = 256
         mv_guidance_scale: float = 7.5
+        mv_weight: float = 0.25 # 1 / 4
 
         # the following is specific to stable diffusion
         sd_view_dependent_prompting: bool = True
         sd_image_size: int = 512
         sd_guidance_perp_neg: float = 0.0
         sd_guidance_scale: float = 7.5
+        sd_weight: float = 1.
 
         # the following is shared between mvdream and stable diffusion
         grad_clip: Optional[
@@ -63,12 +65,11 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         weighting_strategy: str = "uniform" # ASD is suitable for uniform weighting, but can be extended to other strategies
 
         plus_ratio: float = 0.1
-        plus_random: bool = True
         plus_schedule: str = "linear"  # linear or sqrt_<bias>
 
-        # the following is specific to the combination of MVDream and Stable Diffusion
-        sd_weight: float = 1.
-        mv_weight: float = 0.25 # 1 / 4
+        # the following is specific to the combination of MVDream and Stable Diffusion with ASD
+        mv_plus_random: bool = True
+        sd_plus_random: bool = True
 
         # the following is specific to the compatibility with dual rendering
         dual_render_sync_t: bool = False
@@ -146,7 +147,8 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
     def get_t_plus(
         self, 
-        t: Float[Tensor, "B"]
+        t: Float[Tensor, "B"],
+        module: str # "sd" or "mv"
     ):
         # determine the timestamp for the second diffusion model
         if self.cfg.plus_schedule == "linear":
@@ -165,7 +167,14 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         else:
             raise ValueError(f"Invalid plus_schedule: {self.cfg.plus_schedule}")
 
-        if self.cfg.plus_random:
+        if module == "sd":
+            plus_random = self.cfg.sd_plus_random
+        elif module == "mv":
+            plus_random = self.cfg.mv_plus_random
+        else:
+            raise ValueError(f"Invalid module: {module}")
+
+        if plus_random:
             t_plus = (t_plus * torch.rand(*t.shape,device = self.device)).to(torch.long)
         else:
             t_plus = t_plus.to(torch.long)
@@ -373,7 +382,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 # bigger timestamp, the following is specific to ASD
                 # as t_plus is randomly sampled in ASD, 
                 # sample different t_plus for the 1st and 2nd renderings covers larger range
-                t_plus = self.get_t_plus(t)
+                t_plus = self.get_t_plus(t, module="sd")
                 
             else:
                 t = torch.randint(
@@ -385,7 +394,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 )
 
                 # bigger timestamp, the following is specific to ASD
-                t_plus = self.get_t_plus(t)
+                t_plus = self.get_t_plus(t, module="sd")
 
             # random timestamp for the first diffusion model
             latents_noisy = self.sd_scheduler.add_noise(sd_latents, sd_noise, t)
@@ -659,7 +668,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 # bigger timestamp, the following is specific to ASD
                 # as t_plus is randomly sampled in ASD, 
                 # sample different t_plus for the 1st and 2nd renderings covers larger range
-                _t_plus = self.get_t_plus(_t)
+                _t_plus = self.get_t_plus(_t, module="mv")
 
             else:
                 _t = torch.randint(
@@ -670,7 +679,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                     device=self.device,
                 )
                 # bigger timestamp, the following is specific to ASD
-                _t_plus = self.get_t_plus(_t)
+                _t_plus = self.get_t_plus(_t, module="mv")
 
             # keep consistent with the number of views for each prompt
             t = _t.repeat_interleave(self.cfg.mv_n_view)
