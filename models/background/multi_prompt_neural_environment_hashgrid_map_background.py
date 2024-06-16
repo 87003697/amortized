@@ -45,6 +45,7 @@ class MultipromptNeuralHashgridEnvironmentMapBackground(BaseBackground):
         )
         random_aug: bool = False
         random_aug_prob: float = 0.5
+        random_aug_color: Optional[Tuple[float, float, float]] = None
         eval_color: Optional[Tuple[float, float, float]] = None
 
     cfg: Config
@@ -112,9 +113,11 @@ class MultipromptNeuralHashgridEnvironmentMapBackground(BaseBackground):
             and self.cfg.random_aug
             and random.random() < self.cfg.random_aug_prob
         ):
-            # use random background color with probability random_aug_prob
+            random_color = torch.rand(dirs.shape[0], 1, 1, self.cfg.n_output_dims) \
+                if self.cfg.random_aug_color is None \
+                else torch.ones(dirs.shape[0], 1, 1, self.cfg.n_output_dims) * torch.tensor(self.cfg.random_aug_color)
             color = color * 0 + (  # prevent checking for unused parameters in DDP
-                torch.rand(dirs.shape[0], 1, 1, self.cfg.n_output_dims)
+                random_color
                 .to(dirs)
                 .expand(*dirs.shape[:-1], -1)
             )
