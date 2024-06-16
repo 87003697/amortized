@@ -331,27 +331,27 @@ class HplaneSelfAttentionLoRAAttnProcessor(nn.Module):
         # query
         if self.lora_type in ["triple_v1", "sparse_v1", "triple_v2", "triple_v3", "triple_v4"]:
             query = attn.to_q(hidden_states)
-            # prepare the masks for each plane
-            mask_side = torch.zeros([batch_size] + [1] * (query.ndim - 1), device=query.device)
-            mask_side[0::3] = 1
-            mask_front = torch.zeros([batch_size] + [1] * (query.ndim - 1), device=query.device)
-            mask_front[1::3] = 1
-            mask_back = torch.zeros([batch_size] + [1] * (query.ndim - 1), device=query.device)
-            mask_back[2::3] = 1
-            # apply the masks
-            query = query + scale * (
-                + mask_side * self.to_q_side_lora(hidden_states[0::3]).repeat_interleave(3, dim=0) \
-                + mask_front * self.to_q_front_lora(hidden_states[1::3]).repeat_interleave(3, dim=0) \
-                + mask_back * self.to_q_back_lora(hidden_states[2::3]).repeat_interleave(3, dim=0)
-            )
-            # _query_new = torch.zeros_like(query)
-            # # lora for side plane
-            # _query_new[0::3] = self.to_q_side_lora(hidden_states[0::3])
-            # # lora for front plane
-            # _query_new[1::3] = self.to_q_front_lora(hidden_states[1::3])
-            # # lora for back plane
-            # _query_new[2::3] = self.to_q_back_lora(hidden_states[2::3])
-            # query = query + scale * _query_new
+            # # prepare the masks for each plane
+            # mask_side = torch.zeros([batch_size] + [1] * (query.ndim - 1), device=query.device)
+            # mask_side[0::3] = 1
+            # mask_front = torch.zeros([batch_size] + [1] * (query.ndim - 1), device=query.device)
+            # mask_front[1::3] = 1
+            # mask_back = torch.zeros([batch_size] + [1] * (query.ndim - 1), device=query.device)
+            # mask_back[2::3] = 1
+            # # apply the masks
+            # query = query + scale * (
+            #     + mask_side * self.to_q_side_lora(hidden_states[0::3]).repeat_interleave(3, dim=0) \
+            #     + mask_front * self.to_q_front_lora(hidden_states[1::3]).repeat_interleave(3, dim=0) \
+            #     + mask_back * self.to_q_back_lora(hidden_states[2::3]).repeat_interleave(3, dim=0)
+            # )
+            _query_new = torch.zeros_like(query)
+            # lora for side plane
+            _query_new[0::3] = self.to_q_side_lora(hidden_states[0::3])
+            # lora for front plane
+            _query_new[1::3] = self.to_q_front_lora(hidden_states[1::3])
+            # lora for back plane
+            _query_new[2::3] = self.to_q_back_lora(hidden_states[2::3])
+            query = query + scale * _query_new
         elif self.lora_type in ["vanilla"]:
             query = attn.to_q(hidden_states) + scale * self.to_q_lora(hidden_states)
         else:
@@ -368,50 +368,50 @@ class HplaneSelfAttentionLoRAAttnProcessor(nn.Module):
         # key and value
         if self.lora_type in ["triple_v1", "triple_v4"]:
             key = attn.to_k(encoder_hidden_states)
-            # prepare the masks for each plane
-            mask_side = torch.zeros([batch_size] + [1] * (key.ndim - 1), device=key.device)
-            mask_side[0::3] = 1
-            mask_front = torch.zeros([batch_size] + [1] * (key.ndim - 1), device=key.device)
-            mask_front[1::3] = 1
-            mask_back = torch.zeros([batch_size] + [1] * (key.ndim - 1), device=key.device)
-            mask_back[2::3] = 1
-            # apply the masks
-            key = key + scale * (
-                + mask_side * self.to_k_side_lora(encoder_hidden_states[0::3]).repeat_interleave(3, dim=0) \
-                + mask_front * self.to_k_front_lora(encoder_hidden_states[1::3]).repeat_interleave(3, dim=0) \
-                + mask_back * self.to_k_back_lora(encoder_hidden_states[2::3]).repeat_interleave(3, dim=0)
-            )
-            # _key_new = torch.zeros_like(key)
-            # # lora for side plane
-            # _key_new[0::3] = self.to_k_side_lora(encoder_hidden_states[0::3])
-            # # lora for front plane
-            # _key_new[1::3] = self.to_k_front_lora(encoder_hidden_states[1::3])
-            # # lora for back plane
-            # _key_new[2::3] = self.to_k_back_lora(encoder_hidden_states[2::3])
-            # key = key + scale * _key_new
+            # # prepare the masks for each plane
+            # mask_side = torch.zeros([batch_size] + [1] * (key.ndim - 1), device=key.device)
+            # mask_side[0::3] = 1
+            # mask_front = torch.zeros([batch_size] + [1] * (key.ndim - 1), device=key.device)
+            # mask_front[1::3] = 1
+            # mask_back = torch.zeros([batch_size] + [1] * (key.ndim - 1), device=key.device)
+            # mask_back[2::3] = 1
+            # # apply the masks
+            # key = key + scale * (
+            #     + mask_side * self.to_k_side_lora(encoder_hidden_states[0::3]).repeat_interleave(3, dim=0) \
+            #     + mask_front * self.to_k_front_lora(encoder_hidden_states[1::3]).repeat_interleave(3, dim=0) \
+            #     + mask_back * self.to_k_back_lora(encoder_hidden_states[2::3]).repeat_interleave(3, dim=0)
+            # )
+            _key_new = torch.zeros_like(key)
+            # lora for side plane
+            _key_new[0::3] = self.to_k_side_lora(encoder_hidden_states[0::3])
+            # lora for front plane
+            _key_new[1::3] = self.to_k_front_lora(encoder_hidden_states[1::3])
+            # lora for back plane
+            _key_new[2::3] = self.to_k_back_lora(encoder_hidden_states[2::3])
+            key = key + scale * _key_new
 
             value = attn.to_v(encoder_hidden_states)
-            # prepare the masks for each plane
-            mask_side = torch.zeros([batch_size] + [1] * (value.ndim - 1), device=value.device)
-            mask_side[0::3] = 1
-            mask_front = torch.zeros([batch_size] + [1] * (value.ndim - 1), device=value.device)
-            mask_front[1::3] = 1
-            mask_back = torch.zeros([batch_size] + [1] * (value.ndim - 1), device=value.device)
-            mask_back[2::3] = 1
-            # apply the masks
-            value = value + scale * (
-                + mask_side * self.to_v_side_lora(encoder_hidden_states[0::3]).repeat_interleave(3, dim=0) \
-                + mask_front * self.to_v_front_lora(encoder_hidden_states[1::3]).repeat_interleave(3, dim=0) \
-                + mask_back * self.to_v_back_lora(encoder_hidden_states[2::3]).repeat_interleave(3, dim=0)
-            )
-            # _value_new = torch.zeros_like(value)
-            # # lora for side plane
-            # _value_new[0::3] = self.to_v_side_lora(encoder_hidden_states[0::3])
-            # # lora for front plane
-            # _value_new[1::3] = self.to_v_front_lora(encoder_hidden_states[1::3])
-            # # lora for back plane
-            # _value_new[2::3] = self.to_v_back_lora(encoder_hidden_states[2::3])
-            # value = value + scale * _value_new
+            # # prepare the masks for each plane
+            # mask_side = torch.zeros([batch_size] + [1] * (value.ndim - 1), device=value.device)
+            # mask_side[0::3] = 1
+            # mask_front = torch.zeros([batch_size] + [1] * (value.ndim - 1), device=value.device)
+            # mask_front[1::3] = 1
+            # mask_back = torch.zeros([batch_size] + [1] * (value.ndim - 1), device=value.device)
+            # mask_back[2::3] = 1
+            # # apply the masks
+            # value = value + scale * (
+            #     + mask_side * self.to_v_side_lora(encoder_hidden_states[0::3]).repeat_interleave(3, dim=0) \
+            #     + mask_front * self.to_v_front_lora(encoder_hidden_states[1::3]).repeat_interleave(3, dim=0) \
+            #     + mask_back * self.to_v_back_lora(encoder_hidden_states[2::3]).repeat_interleave(3, dim=0)
+            # )
+            _value_new = torch.zeros_like(value)
+            # lora for side plane
+            _value_new[0::3] = self.to_v_side_lora(encoder_hidden_states[0::3])
+            # lora for front plane
+            _value_new[1::3] = self.to_v_front_lora(encoder_hidden_states[1::3])
+            # lora for back plane
+            _value_new[2::3] = self.to_v_back_lora(encoder_hidden_states[2::3])
+            value = value + scale * _value_new
 
         elif self.lora_type in ["vanilla", "sparse_v1", "triple_v2", "triple_v3"]:
             key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(encoder_hidden_states)
@@ -473,27 +473,27 @@ class HplaneSelfAttentionLoRAAttnProcessor(nn.Module):
         if self.lora_type in ["triple_v1", "triple_v2"]:
             # linear proj
             hidden_states = attn.to_out[0](hidden_states)
-            # prepare the masks for each plane
-            mask_side = torch.zeros([batch_size] + [1] * (hidden_states.ndim - 1), device=hidden_states.device)
-            mask_side[0::3] = 1
-            mask_front = torch.zeros([batch_size] + [1] * (hidden_states.ndim - 1), device=hidden_states.device)
-            mask_front[1::3] = 1
-            mask_back = torch.zeros([batch_size] + [1] * (hidden_states.ndim - 1), device=hidden_states.device)
-            mask_back[2::3] = 1
-            # apply the masks
-            hidden_states = hidden_states + scale * (
-                + mask_side * self.to_out_side_lora(hidden_states[0::3]).repeat_interleave(3, dim=0) \
-                + mask_front * self.to_out_front_lora(hidden_states[1::3]).repeat_interleave(3, dim=0) \
-                + mask_back * self.to_out_back_lora(hidden_states[2::3]).repeat_interleave(3, dim=0)
-            )
-            # _hidden_states_new = torch.zeros_like(hidden_states)
-            # # lora for side plane
-            # _hidden_states_new[0::3] = self.to_out_side_lora(hidden_states[0::3])
-            # # lora for front plane
-            # _hidden_states_new[1::3] = self.to_out_front_lora(hidden_states[1::3])
-            # # lora for back plane
-            # _hidden_states_new[2::3] = self.to_out_back_lora(hidden_states[2::3])
-            # hidden_states = hidden_states + scale * _hidden_states_new
+            # # prepare the masks for each plane
+            # mask_side = torch.zeros([batch_size] + [1] * (hidden_states.ndim - 1), device=hidden_states.device)
+            # mask_side[0::3] = 1
+            # mask_front = torch.zeros([batch_size] + [1] * (hidden_states.ndim - 1), device=hidden_states.device)
+            # mask_front[1::3] = 1
+            # mask_back = torch.zeros([batch_size] + [1] * (hidden_states.ndim - 1), device=hidden_states.device)
+            # mask_back[2::3] = 1
+            # # apply the masks
+            # hidden_states = hidden_states + scale * (
+            #     + mask_side * self.to_out_side_lora(hidden_states[0::3]).repeat_interleave(3, dim=0) \
+            #     + mask_front * self.to_out_front_lora(hidden_states[1::3]).repeat_interleave(3, dim=0) \
+            #     + mask_back * self.to_out_back_lora(hidden_states[2::3]).repeat_interleave(3, dim=0)
+            # )
+            _hidden_states_new = torch.zeros_like(hidden_states)
+            # lora for side plane
+            _hidden_states_new[0::3] = self.to_out_side_lora(hidden_states[0::3])
+            # lora for front plane
+            _hidden_states_new[1::3] = self.to_out_front_lora(hidden_states[1::3])
+            # lora for back plane
+            _hidden_states_new[2::3] = self.to_out_back_lora(hidden_states[2::3])
+            hidden_states = hidden_states + scale * _hidden_states_new
         elif self.lora_type in ["vanilla", "sparse_v1", "triple_v3", "triple_v4"]:
             hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(hidden_states)
         else:
@@ -623,27 +623,27 @@ class HplaneCrossAttentionLoRAAttnProcessor(nn.Module):
         # query
         if self.lora_type in ["triple_v1", "triple_v4"]:
             query = attn.to_q(hidden_states)
-            # prepare the masks for each plane
-            mask_side = torch.zeros([batch_size] + [1] * (query.ndim - 1), device=query.device)
-            mask_side[0::3] = 1
-            mask_front = torch.zeros([batch_size] + [1] * (query.ndim - 1), device=query.device)
-            mask_front[1::3] = 1
-            mask_back = torch.zeros([batch_size] + [1] * (query.ndim - 1), device=query.device)
-            mask_back[2::3] = 1
-            # apply the masks
-            query = query + scale * (
-                + mask_side * self.to_q_side_lora(hidden_states[0::3]).repeat_interleave(3, dim=0) \
-                + mask_front * self.to_q_front_lora(hidden_states[1::3]).repeat_interleave(3, dim=0) \
-                + mask_back * self.to_q_back_lora(hidden_states[2::3]).repeat_interleave(3, dim=0)
-            )
-            # _query_new = torch.zeros_like(query)        
-            # # lora for side plane
-            # _query_new[0::3] = self.to_q_side_lora(hidden_states[0::3])
-            # # lora for front plane
-            # _query_new[1::3] = self.to_q_front_lora(hidden_states[1::3])
-            # # lora for back plane
-            # _query_new[2::3] = self.to_q_back_lora(hidden_states[2::3])
-            # query = query + scale * _query_new
+            # # prepare the masks for each plane
+            # mask_side = torch.zeros([batch_size] + [1] * (query.ndim - 1), device=query.device)
+            # mask_side[0::3] = 1
+            # mask_front = torch.zeros([batch_size] + [1] * (query.ndim - 1), device=query.device)
+            # mask_front[1::3] = 1
+            # mask_back = torch.zeros([batch_size] + [1] * (query.ndim - 1), device=query.device)
+            # mask_back[2::3] = 1
+            # # apply the masks
+            # query = query + scale * (
+            #     + mask_side * self.to_q_side_lora(hidden_states[0::3]).repeat_interleave(3, dim=0) \
+            #     + mask_front * self.to_q_front_lora(hidden_states[1::3]).repeat_interleave(3, dim=0) \
+            #     + mask_back * self.to_q_back_lora(hidden_states[2::3]).repeat_interleave(3, dim=0)
+            # )
+            _query_new = torch.zeros_like(query)        
+            # lora for side plane
+            _query_new[0::3] = self.to_q_side_lora(hidden_states[0::3])
+            # lora for front plane
+            _query_new[1::3] = self.to_q_front_lora(hidden_states[1::3])
+            # lora for back plane
+            _query_new[2::3] = self.to_q_back_lora(hidden_states[2::3])
+            query = query + scale * _query_new
         elif self.lora_type in ["vanilla", "triple_v3"]:
             query = attn.to_q(hidden_states) + scale * self.to_q_lora(hidden_states)
         else:
@@ -661,50 +661,50 @@ class HplaneCrossAttentionLoRAAttnProcessor(nn.Module):
         # key and value
         if self.lora_type in ["triple_v1", "triple_v3", "triple_v4"]:
             key = attn.to_k(encoder_hidden_states)
-            # prepare the masks for each plane
-            mask_side = torch.zeros([batch_size] + [1] * (key.ndim - 1), device=key.device)
-            mask_side[0::3] = 1
-            mask_front = torch.zeros([batch_size] + [1] * (key.ndim - 1), device=key.device)
-            mask_front[1::3] = 1
-            mask_back = torch.zeros([batch_size] + [1] * (key.ndim - 1), device=key.device)
-            mask_back[2::3] = 1
-            # apply the masks
-            key = key + scale * (
-                + mask_side * self.to_k_side_lora(encoder_hidden_states[0::3]).repeat_interleave(3, dim=0) \
-                + mask_front * self.to_k_front_lora(encoder_hidden_states[1::3]).repeat_interleave(3, dim=0) \
-                + mask_back * self.to_k_back_lora(encoder_hidden_states[2::3]).repeat_interleave(3, dim=0)
-            )
-            # _key_new = torch.zeros_like(key)
-            # # lora for side plane
-            # _key_new[0::3] = self.to_k_side_lora(encoder_hidden_states[0::3])
-            # # lora for front plane
-            # _key_new[1::3] = self.to_k_front_lora(encoder_hidden_states[1::3])
-            # # lora for back plane
-            # _key_new[2::3] = self.to_k_back_lora(encoder_hidden_states[2::3])
-            # key = key + scale * _key_new
+            # # prepare the masks for each plane
+            # mask_side = torch.zeros([batch_size] + [1] * (key.ndim - 1), device=key.device)
+            # mask_side[0::3] = 1
+            # mask_front = torch.zeros([batch_size] + [1] * (key.ndim - 1), device=key.device)
+            # mask_front[1::3] = 1
+            # mask_back = torch.zeros([batch_size] + [1] * (key.ndim - 1), device=key.device)
+            # mask_back[2::3] = 1
+            # # apply the masks
+            # key = key + scale * (
+            #     + mask_side * self.to_k_side_lora(encoder_hidden_states[0::3]).repeat_interleave(3, dim=0) \
+            #     + mask_front * self.to_k_front_lora(encoder_hidden_states[1::3]).repeat_interleave(3, dim=0) \
+            #     + mask_back * self.to_k_back_lora(encoder_hidden_states[2::3]).repeat_interleave(3, dim=0)
+            # )
+            _key_new = torch.zeros_like(key)
+            # lora for side plane
+            _key_new[0::3] = self.to_k_side_lora(encoder_hidden_states[0::3])
+            # lora for front plane
+            _key_new[1::3] = self.to_k_front_lora(encoder_hidden_states[1::3])
+            # lora for back plane
+            _key_new[2::3] = self.to_k_back_lora(encoder_hidden_states[2::3])
+            key = key + scale * _key_new
 
             value = attn.to_v(encoder_hidden_states)
-            # prepare the masks for each plane
-            mask_side = torch.zeros([batch_size] + [1] * (value.ndim - 1), device=value.device)
-            mask_side[0::3] = 1
-            mask_front = torch.zeros([batch_size] + [1] * (value.ndim - 1), device=value.device)
-            mask_front[1::3] = 1
-            mask_back = torch.zeros([batch_size] + [1] * (value.ndim - 1), device=value.device)
-            mask_back[2::3] = 1
-            # apply the masks
-            value = value + scale * (
-                + mask_side * self.to_v_side_lora(encoder_hidden_states[0::3]).repeat_interleave(3, dim=0) \
-                + mask_front * self.to_v_front_lora(encoder_hidden_states[1::3]).repeat_interleave(3, dim=0) \
-                + mask_back * self.to_v_back_lora(encoder_hidden_states[2::3]).repeat_interleave(3, dim=0)
-            )
-            # _value_new = torch.zeros_like(value)
-            # # lora for side plane
-            # _value_new[0::3] = self.to_v_side_lora(encoder_hidden_states[0::3])
-            # # lora for front plane
-            # _value_new[1::3] = self.to_v_front_lora(encoder_hidden_states[1::3])
-            # # lora for back plane
-            # _value_new[2::3] = self.to_v_back_lora(encoder_hidden_states[2::3])
-            # value = value + scale * _value_new
+            # # prepare the masks for each plane
+            # mask_side = torch.zeros([batch_size] + [1] * (value.ndim - 1), device=value.device)
+            # mask_side[0::3] = 1
+            # mask_front = torch.zeros([batch_size] + [1] * (value.ndim - 1), device=value.device)
+            # mask_front[1::3] = 1
+            # mask_back = torch.zeros([batch_size] + [1] * (value.ndim - 1), device=value.device)
+            # mask_back[2::3] = 1
+            # # apply the masks
+            # value = value + scale * (
+            #     + mask_side * self.to_v_side_lora(encoder_hidden_states[0::3]).repeat_interleave(3, dim=0) \
+            #     + mask_front * self.to_v_front_lora(encoder_hidden_states[1::3]).repeat_interleave(3, dim=0) \
+            #     + mask_back * self.to_v_back_lora(encoder_hidden_states[2::3]).repeat_interleave(3, dim=0)
+            # )
+            _value_new = torch.zeros_like(value)
+            # lora for side plane
+            _value_new[0::3] = self.to_v_side_lora(encoder_hidden_states[0::3])
+            # lora for front plane
+            _value_new[1::3] = self.to_v_front_lora(encoder_hidden_states[1::3])
+            # lora for back plane
+            _value_new[2::3] = self.to_v_back_lora(encoder_hidden_states[2::3])
+            value = value + scale * _value_new
 
         elif self.lora_type in ["vanilla"]:
             key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(encoder_hidden_states)
@@ -726,28 +726,28 @@ class HplaneCrossAttentionLoRAAttnProcessor(nn.Module):
         # linear proj
         if self.lora_type in ["triple_v1"]:
             hidden_states = attn.to_out[0](hidden_states)
-            # prepare the masks for each plane
-            mask_side = torch.zeros([batch_size] + [1] * (hidden_states.ndim - 1), device=hidden_states.device)
-            mask_side[0::3] = 1
-            mask_front = torch.zeros([batch_size] + [1] * (hidden_states.ndim - 1), device=hidden_states.device)
-            mask_front[1::3] = 1
-            mask_back = torch.zeros([batch_size] + [1] * (hidden_states.ndim - 1), device=hidden_states.device)
-            mask_back[2::3] = 1
+            # # prepare the masks for each plane
+            # mask_side = torch.zeros([batch_size] + [1] * (hidden_states.ndim - 1), device=hidden_states.device)
+            # mask_side[0::3] = 1
+            # mask_front = torch.zeros([batch_size] + [1] * (hidden_states.ndim - 1), device=hidden_states.device)
+            # mask_front[1::3] = 1
+            # mask_back = torch.zeros([batch_size] + [1] * (hidden_states.ndim - 1), device=hidden_states.device)
+            # mask_back[2::3] = 1
 
-            # apply the masks
-            hidden_states = hidden_states + scale * (
-                + mask_side * self.to_out_side_lora(hidden_states[0::3]).repeat_interleave(3, dim=0) \
-                + mask_front * self.to_out_front_lora(hidden_states[1::3]).repeat_interleave(3, dim=0) \
-                + mask_back * self.to_out_back_lora(hidden_states[2::3]).repeat_interleave(3, dim=0)
-            )
-            # _hidden_states_new = torch.zeros_like(hidden_states)
-            # # lora for side plane
-            # _hidden_states_new[0::3] = self.to_out_side_lora(hidden_states[0::3])
-            # # lora for front plane
-            # _hidden_states_new[1::3] = self.to_out_front_lora(hidden_states[1::3])
-            # # lora for back plane
-            # _hidden_states_new[2::3] = self.to_out_back_lora(hidden_states[2::3])
-            # hidden_states = hidden_states + scale * _hidden_states_new
+            # # apply the masks
+            # hidden_states = hidden_states + scale * (
+            #     + mask_side * self.to_out_side_lora(hidden_states[0::3]).repeat_interleave(3, dim=0) \
+            #     + mask_front * self.to_out_front_lora(hidden_states[1::3]).repeat_interleave(3, dim=0) \
+            #     + mask_back * self.to_out_back_lora(hidden_states[2::3]).repeat_interleave(3, dim=0)
+            # )
+            _hidden_states_new = torch.zeros_like(hidden_states)
+            # lora for side plane
+            _hidden_states_new[0::3] = self.to_out_side_lora(hidden_states[0::3])
+            # lora for front plane
+            _hidden_states_new[1::3] = self.to_out_front_lora(hidden_states[1::3])
+            # lora for back plane
+            _hidden_states_new[2::3] = self.to_out_back_lora(hidden_states[2::3])
+            hidden_states = hidden_states + scale * _hidden_states_new
         elif self.lora_type in ["vanilla", "triple_v3", "triple_v4"]:
             hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(hidden_states)
         else:
