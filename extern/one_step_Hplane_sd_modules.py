@@ -540,11 +540,11 @@ class HplaneCrossAttentionLoRAAttnProcessor(nn.Module):
         rank: int = 4,
         network_alpha: Optional[float] = None,
         with_bias: bool = False,
-        lora_type: str = "triple_v1", # vanilla, "triple_v3", "triple_v4", "triple_v5"
+        lora_type: str = "triple_v1", # "triple_v2", "triple_v3", "triple_v4", "triple_v5", "vanilla"
     ):
         super().__init__()
 
-        assert lora_type in ["triple_v1", "triple_v3", "triple_v4", "triple_v5", "vanilla"], "The LoRA type is not supported."
+        assert lora_type in ["triple_v1", "triple_v2", "triple_v3", "triple_v4", "triple_v5", "vanilla"], "The LoRA type is not supported."
 
         self.hidden_size = hidden_size
         self.rank = rank
@@ -576,6 +576,23 @@ class HplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             self.to_k_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_v_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_out_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+
+        elif lora_type in ["triple_v2"]:
+            # to_q for all planes
+            self.to_q_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+
+            # to_k, to_v, to_out for each plane
+            self.to_k_side_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_v_side_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_out_side_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+
+            self.to_k_front_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_v_front_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_out_front_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+
+            self.to_k_back_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_v_back_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_out_back_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
 
         elif lora_type in ["triple_v3"]:
             # to_q, to_out for all planes
@@ -670,7 +687,7 @@ class HplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             # lora for back plane
             _query_new[2::3] = self.to_q_back_lora(hidden_states[2::3])
             query = query + scale * _query_new
-        elif self.lora_type in ["vanilla", "triple_v3"]:
+        elif self.lora_type in ["vanilla", "triple_v2", "triple_v3"]:
             query = attn.to_q(hidden_states) + scale * self.to_q_lora(hidden_states)
         else:
             raise NotImplementedError("The LoRA type is not supported for the query in HplaneCrossAttentionLoRAAttnProcessor.")
@@ -685,7 +702,7 @@ class HplaneCrossAttentionLoRAAttnProcessor(nn.Module):
 
         ############################################################################################################
         # key and value
-        if self.lora_type in ["triple_v1", "triple_v3", "triple_v4"]:
+        if self.lora_type in ["triple_v1", "triple_v2", "triple_v3", "triple_v4"]:
             key = attn.to_k(encoder_hidden_states)
             # # prepare the masks for each plane
             # mask_side = torch.zeros([batch_size] + [1] * (key.ndim - 1), device=key.device)
@@ -750,7 +767,7 @@ class HplaneCrossAttentionLoRAAttnProcessor(nn.Module):
 
         ############################################################################################################
         # linear proj
-        if self.lora_type in ["triple_v1"]:
+        if self.lora_type in ["triple_v1", "triple_v2"]:
             hidden_states = attn.to_out[0](hidden_states)
             # # prepare the masks for each plane
             # mask_side = torch.zeros([batch_size] + [1] * (hidden_states.ndim - 1), device=hidden_states.device)
