@@ -44,6 +44,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         mv_image_size: int = 256
         mv_guidance_scale: float = 7.5
         mv_weight: float = 0.25 # 1 / 4
+        mv_2nd_render_only: bool = False
 
         # the following is specific to stable diffusion
         sd_view_dependent_prompting: bool = True
@@ -51,6 +52,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         sd_guidance_perp_neg: float = 0.0
         sd_guidance_scale: float = 7.5
         sd_weight: float = 1.
+        sd_1st_render_only: bool = False
 
         # the following is shared between mvdream and stable diffusion
         grad_clip: Optional[
@@ -61,7 +63,6 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         # the following is specific to ASD
         min_step_percent: float = 0.02
         max_step_percent: float = 0.98
-
         weighting_strategy: str = "uniform" # ASD is suitable for uniform weighting, but can be extended to other strategies
 
         plus_ratio: float = 0.1
@@ -853,18 +854,32 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         ################################################################################################
         # the following is specific to MVDream
         if self.cfg.mv_weight > 0:
-            loss_mv, grad_mv = self.mv_grad_asd(
-                rgb,
-                prompt_utils,
-                elevation,
-                azimuth,
-                camera_distances,
-                c2w,
-                rgb_as_latents=rgb_as_latents,
-                fovy=fovy,
-                rgb_2nd=rgb_2nd,
-                **kwargs,
-            )
+            if is_dual and self.cfg.mv_2nd_render_only:
+                # only use the 2nd rendering for the guidance
+                loss_mv, grad_mv = self.mv_grad_asd(
+                    rgb_2nd,
+                    prompt_utils,
+                    elevation,
+                    azimuth,
+                    camera_distances,
+                    c2w,
+                    rgb_as_latents=rgb_as_latents,
+                    fovy=fovy,
+                    **kwargs,
+                )
+            else:
+                loss_mv, grad_mv = self.mv_grad_asd(
+                    rgb,
+                    prompt_utils,
+                    elevation,
+                    azimuth,
+                    camera_distances,
+                    c2w,
+                    rgb_as_latents=rgb_as_latents,
+                    fovy=fovy,
+                    rgb_2nd=rgb_2nd,
+                    **kwargs,
+                )
         else:
             loss_mv = torch.tensor(
                 0.0 if not is_dual else [0.0, 0.0],
@@ -896,19 +911,33 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
         # select only one view for the guidance
         if self.cfg.sd_weight > 0:
-            loss_sd, grad_sd = self.sd_grad_asd(
-                rgb[idx],
-                prompt_utils,
-                elevation[idx],
-                azimuth[idx],
-                camera_distances[idx],
-                c2w[idx],
-                rgb_as_latents=rgb_as_latents,
-                fovy=fovy,
-                rgb_2nd=rgb_2nd[idx_2nd] if is_dual else None,
-                azimuth_2nd=azimuth[idx_2nd] if is_dual else None, # mvdream's n_view only varies azimuth
-                **kwargs,
-            )
+            if is_dual and self.cfg.sd_1st_render_only:
+                # only use the 1st rendering for the guidance
+                loss_sd, grad_sd = self.sd_grad_asd(
+                    rgb[idx],
+                    prompt_utils,
+                    elevation[idx],
+                    azimuth[idx],
+                    camera_distances[idx],
+                    c2w[idx],
+                    rgb_as_latents=rgb_as_latents,
+                    fovy=fovy,
+                    **kwargs,
+                )
+            else:
+                loss_sd, grad_sd = self.sd_grad_asd(
+                    rgb[idx],
+                    prompt_utils,
+                    elevation[idx],
+                    azimuth[idx],
+                    camera_distances[idx],
+                    c2w[idx],
+                    rgb_as_latents=rgb_as_latents,
+                    fovy=fovy,
+                    rgb_2nd=rgb_2nd[idx_2nd] if is_dual else None,
+                    azimuth_2nd=azimuth[idx_2nd] if is_dual else None, # mvdream's n_view only varies azimuth
+                    **kwargs,
+                )
         else:
             loss_sd = torch.tensor(
                 0.0 if not is_dual else [0.0, 0.0],
@@ -928,16 +957,36 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 "max_step": self.max_step,
             }
         else:
-            # return the loss and grad_norm for the 1st and 2nd renderings
+            # return the loss and grad_norm for the 1st renderings
+            loss = 0
+            grad_norm = 0
+            # special case for sd_1st_render_only
+            loss += self.cfg.sd_weight * (loss_sd if self.cfg.sd_1st_render_only else loss_sd[0])
+            grad_norm += self.cfg.sd_weight * (grad_sd if self.cfg.sd_1st_render_only else grad_sd[0])
+            # special case for mv_2nd_render_only
+            loss += self.cfg.mv_weight * (0 if self.cfg.mv_2nd_render_only else loss_mv[0])
+            grad_norm += self.cfg.mv_weight * (0 if self.cfg.mv_2nd_render_only else grad_mv[0])
+
             guidance_1st =  {
-                "loss_asd": self.cfg.sd_weight * loss_sd[0] + self.cfg.mv_weight * loss_mv[0],
-                "grad_norm_asd": self.cfg.sd_weight * grad_sd[0] + self.cfg.mv_weight * grad_mv[0],
+                "loss_asd": loss,
+                "grad_norm_asd": grad_norm,
                 "min_step": self.min_step,
                 "max_step": self.max_step,
             }
+
+            # return the loss and grad_norm for the 2nd renderings
+            loss = 0
+            grad_norm = 0
+            # special case for sd_1st_render_only
+            loss += self.cfg.sd_weight * (0 if self.cfg.sd_1st_render_only else loss_sd[1])
+            grad_norm += self.cfg.sd_weight * (0 if self.cfg.sd_1st_render_only else grad_sd[1])
+            # special case for mv_2nd_render_only
+            loss += self.cfg.mv_weight * (loss_mv if self.cfg.mv_2nd_render_only else loss_mv[1])
+            grad_norm += self.cfg.mv_weight * (grad_mv if self.cfg.mv_2nd_render_only else grad_mv[1])
+                                               
             guidance_2nd =  {
-                "loss_asd": self.cfg.sd_weight * loss_sd[1] + self.cfg.mv_weight * loss_mv[1],
-                "grad_norm_asd": self.cfg.sd_weight * grad_sd[1] + self.cfg.mv_weight * grad_mv[1],
+                "loss_asd": loss,
+                "grad_norm_asd": grad_norm,
                 "min_step": self.min_step,
                 "max_step": self.max_step,
             }
