@@ -494,14 +494,19 @@ class MultiPromptProcessorOutput:
                 return torch.stack(self.local_text_embeddings, dim=0).to(self.device)
             else:
                 feature_list_batch = []
-                for prompt_vd in self.text_embeddings_vd:
+                for prompt_vd, prompt in zip(self.text_embeddings_vd, self.local_text_embeddings):
                     feature_list = []
                     for view in self.use_view_dependent_text_embeddings:
-                        assert view in ["front", "side", "back", "overhead"], f"Invalid view-dependent text embeddings: {view}"
-                        direction_idx = self.direction2idx[view]
-                        feature_list.append(
-                            prompt_vd[direction_idx]
-                        )
+                        assert view in ["front", "side", "back", "overhead", "none"], f"Invalid view-dependent text embeddings: {view}"
+                        if view == "none": # special case for not using view-dependent text embeddings
+                            feature_list.append(
+                                prompt
+                            )
+                        else:
+                            direction_idx = self.direction2idx[view]
+                            feature_list.append(
+                                prompt_vd[direction_idx]
+                            )
                     feature_list_batch.append(
                         torch.stack(
                             feature_list, 

@@ -687,7 +687,7 @@ class HplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             # lora for back plane
             _query_new[2::3] = self.to_q_back_lora(hidden_states[2::3])
             query = query + scale * _query_new
-        elif self.lora_type in ["vanilla", "triple_v2", "triple_v3"]:
+        elif self.lora_type in ["vanilla", "triple_v2", "triple_v3", ]:
             query = attn.to_q(hidden_states) + scale * self.to_q_lora(hidden_states)
         else:
             raise NotImplementedError("The LoRA type is not supported for the query in HplaneCrossAttentionLoRAAttnProcessor.")
@@ -702,7 +702,7 @@ class HplaneCrossAttentionLoRAAttnProcessor(nn.Module):
 
         ############################################################################################################
         # key and value
-        if self.lora_type in ["triple_v1", "triple_v2", "triple_v3", "triple_v4"]:
+        if self.lora_type in ["triple_v1", "triple_v2", "triple_v3", "triple_v4", ]:
             key = attn.to_k(encoder_hidden_states)
             # # prepare the masks for each plane
             # mask_side = torch.zeros([batch_size] + [1] * (key.ndim - 1), device=key.device)
@@ -767,7 +767,7 @@ class HplaneCrossAttentionLoRAAttnProcessor(nn.Module):
 
         ############################################################################################################
         # linear proj
-        if self.lora_type in ["triple_v1", "triple_v2"]:
+        if self.lora_type in ["triple_v1", "triple_v2", ]:
             hidden_states = attn.to_out[0](hidden_states)
             # # prepare the masks for each plane
             # mask_side = torch.zeros([batch_size] + [1] * (hidden_states.ndim - 1), device=hidden_states.device)
