@@ -65,12 +65,13 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         max_step_percent: float = 0.98
         weighting_strategy: str = "uniform" # ASD is suitable for uniform weighting, but can be extended to other strategies
 
-        plus_ratio: float = 0.1
         plus_schedule: str = "linear"  # linear or sqrt_<bias>
 
         # the following is specific to the combination of MVDream and Stable Diffusion with ASD
         mv_plus_random: bool = True
+        mv_plus_ratio: float = 0.1
         sd_plus_random: bool = True
+        sd_plus_ratio: float = 0.1
 
         # the following is specific to the compatibility with dual rendering
         dual_render_sync_t: bool = False
@@ -151,9 +152,20 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         t: Float[Tensor, "B"],
         module: str # "sd" or "mv"
     ):
+        
+        # determine the attributes that differ between SD and MV
+        if module == "sd":
+            plus_random = self.cfg.sd_plus_random
+            plus_ratio = self.cfg.sd_plus_ratio
+        elif module == "mv":
+            plus_random = self.cfg.mv_plus_random
+            plus_ratio = self.cfg.mv_plus_ratio
+        else:
+            raise ValueError(f"Invalid module: {module}")
+
         # determine the timestamp for the second diffusion model
         if self.cfg.plus_schedule == "linear":
-            t_plus = self.cfg.plus_ratio * (t - self.min_step)
+            t_plus = plus_ratio * (t - self.min_step)
         
         elif self.cfg.plus_schedule.startswith("sqrt"):
             bias = 0
@@ -163,23 +175,26 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 except:
                     raise ValueError(f"Invalid sqrt bias: {self.cfg.plus_schedule}")
                 
-            t_plus = torch.sqrt(t - self.min_step + bias)
+            t_plus = plus_ratio * torch.sqrt(t - self.min_step + bias)
         
         else:
             raise ValueError(f"Invalid plus_schedule: {self.cfg.plus_schedule}")
 
-        if module == "sd":
-            plus_random = self.cfg.sd_plus_random
-        elif module == "mv":
-            plus_random = self.cfg.mv_plus_random
-        else:
-            raise ValueError(f"Invalid module: {module}")
+        # clamp t_plus to the range [0, T_max - t], added in the revision
+        t_plus = torch.clamp(
+            t_plus,
+            torch.zeros_like(t), 
+            self.num_train_timesteps - t - 1,
+        )
 
+        # add the offset
         if plus_random:
             t_plus = (t_plus * torch.rand(*t.shape,device = self.device)).to(torch.long)
         else:
             t_plus = t_plus.to(torch.long)
         t_plus = t + t_plus
+
+        # double check the range in [1, 999]
         t_plus = torch.clamp(
             t_plus,
             1, # T_min = 1
@@ -248,299 +263,108 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             latents = self._mv_encode_images(rgb_BCHW_resize)
         return latents
 
-    def sd_grad_asd(
+
+    def _mv_noise_pred(
         self,
-        rgb: Float[Tensor, "B H W C"],
-        prompt_utils: PromptProcessorOutput,
-        elevation: Float[Tensor, "B"],
-        azimuth: Float[Tensor, "B"],
-        camera_distances: Float[Tensor, "B"],
-        c2w: Float[Tensor, "B 4 4"],
-        rgb_as_latents: bool = False,
+        mv_latents: Float[Tensor, "B 4 32 32"],
+        mv_noise: Float[Tensor, "B 4 32 32"],
+        t: Float[Tensor, "B"],
+        t_plus: Float[Tensor, "B"],
+        text_embeddings_vd: Float[Tensor, "B 77 1024"],
+        text_embeddings_uncond: Float[Tensor, "B 77 1024"],
+        camera: Float[Tensor, "B 4 4"],
         fovy=None,
-        rgb_2nd: Optional[Float[Tensor, "B H W C"]] = None,
-        azimuth_2nd: Optional[Float[Tensor, "B"]] = None,
-        **kwargs,
+        is_dual: bool = False,
     ):
-        # determine if dual rendering is enabled
-        is_dual = True if rgb_2nd is not None else False
+        
+        # determine attributes ################################################################################################
+        use_t_plus = self.cfg.mv_plus_ratio > 0
 
-        view_batch_size = rgb.shape[0] # the number of views 
-        img_batch_size = rgb.shape[0] 
-        rgb_BCHW = rgb.permute(0, 3, 1, 2)
-        # special case for dual rendering
-        if is_dual:
-            img_batch_size *= 2
-            rgb_2nd_BCHW = rgb_2nd.permute(0, 3, 1, 2)
-            assert azimuth_2nd is not None, "azimuth_2nd is required for dual rendering"
-
-        ################################################################################################
-        # the following is specific to MVDream
-        sd_latents = self.sd_get_latents(
-            rgb_BCHW,
-            rgb_BCHW_2nd=rgb_2nd_BCHW if is_dual else None,
-            rgb_as_latents=rgb_as_latents,
+        # prepare text embeddings ################################################################################################
+        text_embeddings = [
+            text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 1st diffusion model's conditional guidance
+            text_embeddings_uncond if not is_dual else text_embeddings_uncond.repeat(2, 1, 1), # for the 1st diffusion model's unconditional guidance
+        ]
+        if use_t_plus:
+            text_embeddings += [
+                text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 2nd diffusion model's conditional guidance
+            ]
+        text_embeddings = torch.cat(
+            text_embeddings,
+            dim=0
         )
 
-        # prepare noisy input
-        sd_noise = torch.randn_like(sd_latents)
+        # prepare noisy input ################################################################################################
+        # random timestamp for the first diffusion model
+        latents_noisy = self.mv_model.q_sample(mv_latents, t, noise=mv_noise)
 
-        # prepare text embeddings
-        if not self.sd_use_perp_neg:
-            text_embeddings = prompt_utils.get_text_embeddings(
-                elevation, azimuth, camera_distances, 
-                view_dependent_prompting=self.cfg.sd_view_dependent_prompting,
-                use_2nd_uncond = False
-            )
-            text_batch_size = text_embeddings.shape[0] // 2
-            
-            # repeat the text embeddings w.r.t. the number of views
-            text_embeddings_vd     = text_embeddings[0 * text_batch_size: 1 * text_batch_size].repeat_interleave(
-                view_batch_size // text_batch_size, dim = 0
-            )
-            text_embeddings_uncond = text_embeddings[1 * text_batch_size: 2 * text_batch_size].repeat_interleave(
-                view_batch_size // text_batch_size, dim = 0
-            )
+        latents_model_input = [
+            latents_noisy,
+        ] * 2 # 2 for the conditional and unconditional guidance for the 1st diffusion model
 
-            # if dual rendering is enabled, fetch the text embeddings for the 2nd rendering
-            if is_dual:
-                text_embeddings_vd_2nd = prompt_utils.get_text_embeddings(
-                    elevation, azimuth_2nd, camera_distances,
-                    view_dependent_prompting=self.cfg.sd_view_dependent_prompting,
-                    use_2nd_uncond = False
-                )
-                # we only need the view-dependent text embeddings
-                text_embeddings_vd_2nd = text_embeddings_vd_2nd[0 * text_batch_size: 1 * text_batch_size].repeat_interleave(
-                    view_batch_size // text_batch_size, dim = 0
-                )
-
-            text_embeddings = torch.cat(
-                [
-                    text_embeddings_vd if not is_dual else 
-                        torch.cat([text_embeddings_vd, text_embeddings_vd_2nd], dim=0),
-                    text_embeddings_uncond if not is_dual else 
-                        text_embeddings_uncond.repeat(2, 1, 1), # same for the 1st and 2nd renderings
-                    text_embeddings_vd if not is_dual else 
-                        torch.cat([text_embeddings_vd, text_embeddings_vd_2nd], dim=0),
-                ], 
-                dim=0
-            )
-
-            neg_guidance_weights = None
-        else:
-            assert prompt_utils.use_perp_neg # just to make sure
-            (
-                text_embeddings,
-                neg_guidance_weights,
-            ) = prompt_utils.get_text_embeddings_perp_neg(
-                elevation, azimuth, camera_distances, 
-                view_dependent_prompting=self.cfg.sd_view_dependent_prompting,
-                use_2nd_uncond = False
-            )
-
-            raise NotImplementedError("The perp_neg is not implemented yet")
-        
-            # text_batch_size = text_embeddings.shape[0] // 4
-            # neg_guidance_weights = neg_guidance_weights * -1 * self.cfg.sd_guidance_perp_neg # multiply by a negative value to control its magnitude
-
-            # text_embeddings_vd     = text_embeddings[0 * text_batch_size: 1 * text_batch_size].repeat_interleave(
-            #     view_batch_size // text_batch_size, dim = 0
-            # )
-            # text_embeddings_uncond = text_embeddings[1 * text_batch_size: 2 * text_batch_size].repeat_interleave(
-            #     view_batch_size // text_batch_size, dim = 0
-            # )
-            # text_embeddings_vd_neg = text_embeddings[2 * text_batch_size: 4 * text_batch_size].repeat_interleave(
-            #     view_batch_size // text_batch_size, dim = 0
-            # )
-
-            # text_embeddings = torch.cat(
-            #     [
-            #         text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 1st diffusion model
-            #         text_embeddings_uncond if not is_dual else text_embeddings_uncond.repeat(2, 1, 1),
-            #         text_embeddings_vd_neg if not is_dual else text_embeddings_vd_neg.repeat(2, 1, 1),
-            #         text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 2nd diffusion model
-            #     ],
-            #     dim=0
-            # )
-
-            # if is_dual: # repeat the neg_guidance_weights
-            #     neg_guidance_weights = neg_guidance_weights.repeat(2, 1)
-
-        assert self.min_step is not None and self.max_step is not None
-        with torch.no_grad():
-
-            if is_dual and self.cfg.dual_render_sync_t:
-                t = torch.randint(
-                    self.min_step,
-                    self.max_step + 1,
-                    [view_batch_size],
-                    dtype=torch.long,
-                    device=self.device,
-                )
-                
-                t = t.repeat(2) # repeat for the 1st and 2nd renderings
-
-                # bigger timestamp, the following is specific to ASD
-                # as t_plus is randomly sampled in ASD, 
-                # sample different t_plus for the 1st and 2nd renderings covers larger range
-                t_plus = self.get_t_plus(t, module="sd")
-                
-            else:
-                t = torch.randint(
-                    self.min_step,
-                    self.max_step + 1,
-                    [img_batch_size],
-                    dtype=torch.long,
-                    device=self.device,
-                )
-
-                # bigger timestamp, the following is specific to ASD
-                t_plus = self.get_t_plus(t, module="sd")
-
-            # random timestamp for the first diffusion model
-            latents_noisy = self.sd_scheduler.add_noise(sd_latents, sd_noise, t)
-
+        if use_t_plus:
             # random timestamp for the second diffusion model
-            latents_noisy_second = self.sd_scheduler.add_noise(sd_latents, sd_noise, t_plus)
+            latents_noisy_second = self.mv_model.q_sample(mv_latents, t_plus, noise=mv_noise)
 
-            # repeat the latents for the first diffusion model, if use_perp_neg is enabled, then
-            # require 4 repeats, otherwise 2
-            num_repeats = 2 if not self.sd_use_perp_neg else 4
+            latents_model_input += [
+                latents_noisy_second,
+            ]
 
-            # prepare input for UNet
-            latents_model_input = torch.cat(
-                [
-                    latents_noisy,
-                ] * num_repeats + [        
-                    latents_noisy_second,
-                ],
-                dim=0,
+        latents_model_input = torch.cat(
+            latents_model_input,
+            dim=0,
+        )
+
+        # prepare timestep input ################################################################################################
+        t_expand = [
+            t,
+        ] * 2 # 2 for the conditional and unconditional guidance for the 1st diffusion model
+
+        if use_t_plus:
+            t_expand += [
+                t_plus,
+            ]
+
+        t_expand = torch.cat(
+            t_expand,
+            dim=0,
+        )
+
+        # prepare context input ################################################################################################
+        assert camera is not None
+        camera = self._mv_get_camera_cond(camera, fovy=fovy)
+        num_repeat = 3 if use_t_plus else 2
+        if is_dual:
+            num_repeat *= 2
+        camera = camera.repeat(
+            num_repeat, 
+            1
+        ).to(text_embeddings)
+        context = {
+            "context": text_embeddings,
+            "camera": camera,
+            "num_frames": self.cfg.mv_n_view,
+        }
+
+        # u-net forward pass ################################################################################################
+        noise_pred = self.mv_model.apply_model(
+            latents_model_input, 
+            t_expand,
+            context,
+        )
+
+        # split the noise_pred ################################################################################################
+        if use_t_plus:
+            noise_pred_text, noise_pred_uncond, noise_pred_text_second = noise_pred.chunk(
+                3
             )
-
-            t_expand = torch.cat(
-                [
-                    t,
-                ] * num_repeats + [
-                    t_plus,
-                ],
-                dim=0,
-            )            
-
-            noise_pred = self.sd_unet(
-                latents_model_input.to(self.weights_dtype),
-                t_expand.to(self.weights_dtype),
-                encoder_hidden_states=text_embeddings.to(self.weights_dtype),
-            ).sample.to(sd_latents.dtype)
-                
-        # determine the weight
-        if self.cfg.weighting_strategy == "sds":
-            # w(t), sigma_t^2
-            w = (1 - self.alphas[t]).view(-1, 1, 1, 1)
-        elif self.cfg.weighting_strategy == "uniform":
-            w = 1
-        elif self.cfg.weighting_strategy == "fantasia3d":
-            w = (self.alphas[t] ** 0.5 * (1 - self.alphas[t])).view(-1, 1, 1, 1)
         else:
-            raise ValueError(
-                f"Unknown weighting strategy: {self.cfg.weighting_strategy}"
+            noise_pred_text, noise_pred_uncond = noise_pred.chunk(
+                2
             )
+            noise_pred_text_second = noise_pred_text
 
-        # split the noise_pred
-        noise_pred_text    = noise_pred[0 * img_batch_size: 1 * img_batch_size]
-        noise_pred_uncond  = noise_pred[1 * img_batch_size: 2 * img_batch_size]
-        noise_pred_vd_neg  = noise_pred[2 * img_batch_size: 4 * img_batch_size] if self.sd_use_perp_neg else None
-        noise_pred_second  = noise_pred[4 * img_batch_size: 5 * img_batch_size] if self.sd_use_perp_neg else noise_pred[2 * img_batch_size: 3 * img_batch_size]
-
-        # aggregate the noise_pred
-        eps_pos = noise_pred_text - noise_pred_uncond
-        if neg_guidance_weights is not None: # use_perp_neg is enabled
-            accum_grad = 0
-            n_negative_prompts = neg_guidance_weights.shape[-1]
-            for i in range(n_negative_prompts):
-                eps_vd_neg = noise_pred_vd_neg[i::n_negative_prompts] - noise_pred_uncond
-                accum_grad += neg_guidance_weights[:, i].view(
-                    -1, *[1] * (eps_vd_neg.ndim - 1)
-                ) * perpendicular_component(eps_vd_neg, eps_pos) # eps_vd_neg # v2
-
-            # noise_pred_p = (eps_pos) * guidenace_scale + noise_pred_uncond + accum_grad
-            noise_pred_first = (eps_pos + accum_grad) * self.cfg.sd_guidance_scale + noise_pred_uncond 
-
-        else: # if not use_perp_neg
-            noise_pred_first = eps_pos                * self.cfg.sd_guidance_scale + noise_pred_uncond
-
-        grad = (noise_pred_first - noise_pred_second) * w
-        grad = torch.nan_to_num(grad)
-        # clip grad for stability?
-        if self.grad_clip_val is not None:
-            grad = torch.clamp(grad, -self.grad_clip_val, self.grad_clip_val)
-
-        # reparameterization trick
-        # d(loss)/d(latents) = latents - target = latents - (latents - grad) = grad
-        target = (sd_latents - grad).detach()
-        if not is_dual:
-            loss_asd = 0.5 * F.mse_loss(sd_latents, target, reduction="sum") / view_batch_size
-            return loss_asd, grad.norm()
-        else:
-            # split the grad into two parts
-            loss_asd = torch.stack(
-                [
-                    0.5 * F.mse_loss(sd_latents[:view_batch_size], target[:view_batch_size], reduction="sum") / view_batch_size,
-                    0.5 * F.mse_loss(sd_latents[view_batch_size:], target[view_batch_size:], reduction="sum") / view_batch_size,
-                ]
-            )
-            grad_norm = torch.stack(
-                [
-                    grad[:view_batch_size].norm(),
-                    grad[view_batch_size:].norm(),
-                ]
-            )
-            return loss_asd, grad_norm
-            
-
-################################################################################################
-# the following is specific to Stable Diffusion
-    def _sd_encode_images(
-        self, imgs: Float[Tensor, "B 3 512 512"]
-    ) -> Float[Tensor, "B 4 64 64"]:
-        input_dtype = imgs.dtype
-        imgs = imgs * 2.0 - 1.0
-        posterior = self.sd_vae.encode(imgs.to(self.weights_dtype)).latent_dist
-        latents = posterior.sample() * self.sd_vae.config.scaling_factor
-        return latents.to(input_dtype)
-
-    def sd_get_latents(
-        self, 
-        rgb_BCHW: Float[Tensor, "B C H W"], 
-        rgb_BCHW_2nd: Optional[Float[Tensor, "B C H W"]] = None,
-        rgb_as_latents=False
-    ) -> Float[Tensor, "B 4 64 64"]:
-        if rgb_as_latents:
-            size = self.cfg.sd_image_size // 8
-            latents = F.interpolate(
-                rgb_BCHW, size=(size, size), mode="bilinear", align_corners=False
-            )
-            # resize the second latent if it exists
-            if rgb_BCHW_2nd is not None:
-                latents_2nd = F.interpolate(
-                    rgb_BCHW_2nd, size=(size, size), mode="bilinear", align_corners=False
-                )
-                # concatenate the two latents
-                latents = torch.cat([latents, latents_2nd], dim=0)
-        else:
-            size = self.cfg.sd_image_size
-            rgb_BCHW_resize = F.interpolate(
-                rgb_BCHW, size=(size, size), mode="bilinear", align_corners=False
-            )
-            # resize the second image if it exists
-            if rgb_BCHW_2nd is not None:
-                rgb_BCHW_2nd_resize = F.interpolate(
-                    rgb_BCHW_2nd, size=(size, size), mode="bilinear", align_corners=False
-                )
-                # concatenate the two images
-                rgb_BCHW_resize = torch.cat([rgb_BCHW_resize, rgb_BCHW_2nd_resize], dim=0)
-            # encode image into latents
-            latents = self._sd_encode_images(rgb_BCHW_resize)
-        return latents
+        return noise_pred_text, noise_pred_uncond, noise_pred_text_second
 
     def mv_grad_asd(
         self,
@@ -685,48 +509,18 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             # keep consistent with the number of views for each prompt
             t = _t.repeat_interleave(self.cfg.mv_n_view)
             t_plus = _t_plus.repeat_interleave(self.cfg.mv_n_view)
-            
-            # random timestamp for the first diffusion model
-            latents_noisy = self.mv_model.q_sample(mv_latents, t, noise=mv_noise)
 
-            # random timestamp for the second diffusion model
-            latents_noisy_second = self.mv_model.q_sample(mv_latents, t_plus, noise=mv_noise)
-
-            # prepare input for UNet
-            latents_model_input = torch.cat(
-                [
-                    latents_noisy,
-                    latents_noisy,
-                    latents_noisy_second,
-                ],
-                dim=0,
-            )
-
-            t_expand = torch.cat(
-                [
-                    t,
-                    t,
-                    t_plus,
-                ],
-                dim=0,
-            )
-
-            assert camera is not None
-            camera = self._mv_get_camera_cond(camera, fovy=fovy)
-            camera = camera.repeat(
-                3 if not is_dual else 6, 
-                1
-            ).to(text_embeddings)
-            context = {
-                "context": text_embeddings,
-                "camera": camera,
-                "num_frames": self.cfg.mv_n_view,
-            }
-
-            noise_pred = self.mv_model.apply_model(
-                latents_model_input, 
-                t_expand,
-                context,
+            # perform noise prediction
+            noise_pred_text, noise_pred_uncond, noise_pred_text_second = self._mv_noise_pred(
+                mv_latents, 
+                mv_noise,
+                t,
+                t_plus,
+                text_embeddings_vd,
+                text_embeddings_uncond,
+                camera,
+                fovy=fovy,
+                is_dual=is_dual,
             )
 
         # determine the weight
@@ -742,10 +536,6 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 f"Unknown weighting strategy: {self.cfg.weighting_strategy}"
             )
 
-        # perform guidance
-        noise_pred_text, noise_pred_uncond, noise_pred_text_second = noise_pred.chunk(
-            3
-        )
         noise_pred_first = noise_pred_uncond + self.cfg.mv_guidance_scale * (
             noise_pred_text - noise_pred_uncond
         )
@@ -779,6 +569,371 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 ]
             )
             return loss_asd, grad_norm
+
+
+
+
+################################################################################################
+# the following is specific to Stable Diffusion
+    def _sd_encode_images(
+        self, imgs: Float[Tensor, "B 3 512 512"]
+    ) -> Float[Tensor, "B 4 64 64"]:
+        input_dtype = imgs.dtype
+        imgs = imgs * 2.0 - 1.0
+        posterior = self.sd_vae.encode(imgs.to(self.weights_dtype)).latent_dist
+        latents = posterior.sample() * self.sd_vae.config.scaling_factor
+        return latents.to(input_dtype)
+
+    def sd_get_latents(
+        self, 
+        rgb_BCHW: Float[Tensor, "B C H W"], 
+        rgb_BCHW_2nd: Optional[Float[Tensor, "B C H W"]] = None,
+        rgb_as_latents=False
+    ) -> Float[Tensor, "B 4 64 64"]:
+        if rgb_as_latents:
+            size = self.cfg.sd_image_size // 8
+            latents = F.interpolate(
+                rgb_BCHW, size=(size, size), mode="bilinear", align_corners=False
+            )
+            # resize the second latent if it exists
+            if rgb_BCHW_2nd is not None:
+                latents_2nd = F.interpolate(
+                    rgb_BCHW_2nd, size=(size, size), mode="bilinear", align_corners=False
+                )
+                # concatenate the two latents
+                latents = torch.cat([latents, latents_2nd], dim=0)
+        else:
+            size = self.cfg.sd_image_size
+            rgb_BCHW_resize = F.interpolate(
+                rgb_BCHW, size=(size, size), mode="bilinear", align_corners=False
+            )
+            # resize the second image if it exists
+            if rgb_BCHW_2nd is not None:
+                rgb_BCHW_2nd_resize = F.interpolate(
+                    rgb_BCHW_2nd, size=(size, size), mode="bilinear", align_corners=False
+                )
+                # concatenate the two images
+                rgb_BCHW_resize = torch.cat([rgb_BCHW_resize, rgb_BCHW_2nd_resize], dim=0)
+            # encode image into latents
+            latents = self._sd_encode_images(rgb_BCHW_resize)
+        return latents
+
+
+    def _sd_noise_pred(
+        self,
+        sd_latents: Float[Tensor, "B 4 64 64"],
+        sd_noise: Float[Tensor, "B 4 64 64"],
+        t: Float[Tensor, "B"],
+        t_plus: Float[Tensor, "B"],
+        text_embeddings_vd: Float[Tensor, "B 77 1024"],
+        text_embeddings_uncond: Float[Tensor, "B 77 1024"],
+        text_embeddings_vd_2nd: Optional[Float[Tensor, "B 77 1024"]] = None,
+        text_embeddings_vd_neg: Optional[Float[Tensor, "B 77 1024"]] = None,
+        is_dual: bool = False,
+    ):
+        """
+            Wrapper for the noise prediction of the stable diffusion model
+        """
+        img_batch_size = sd_latents.shape[0]
+        use_t_plus = self.cfg.sd_plus_ratio > 0 # important for the 2nd diffusion model
+
+        # prepare text embeddings ################################################################################################
+
+        if self.sd_use_perp_neg:
+            assert text_embeddings_vd_neg is not None
+            raise NotImplementedError("The perp_neg is not implemented yet")
+            # text_embeddings = torch.cat(
+            #     [
+            #         text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 1st diffusion model
+            #         text_embeddings_uncond if not is_dual else text_embeddings_uncond.repeat(2, 1, 1),
+            #         text_embeddings_vd_neg if not is_dual else text_embeddings_vd_neg.repeat(2, 1, 1),
+            #         text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 2nd diffusion model
+            #     ],
+            #     dim=0
+            # )
+        else:
+            text_embeddings = [
+                    text_embeddings_vd if not is_dual else 
+                        torch.cat([text_embeddings_vd, text_embeddings_vd_2nd], dim=0),
+                    text_embeddings_uncond if not is_dual else 
+                        text_embeddings_uncond.repeat(2, 1, 1), # same for the 1st and 2nd renderings
+            ]
+            if use_t_plus: # require more text embeddings for the 2nd diffusion model
+                text_embeddings += [
+                    text_embeddings_vd if not is_dual else 
+                        torch.cat([text_embeddings_vd, text_embeddings_vd_2nd], dim=0),
+                ]
+                # otherwise we save 1/3 batch size
+            text_embeddings = torch.cat(
+                text_embeddings,
+                dim=0
+            )
+
+        # repeat the latents for the first diffusion model, if use_perp_neg is enabled, then
+        # require 4 repeats, otherwise 2
+        num_repeats = 2 if not self.sd_use_perp_neg else 4
+ 
+        # prepare latent input for UNet ################################################################################################
+        latents_noisy = self.sd_scheduler.add_noise(sd_latents, sd_noise, t)
+
+        latents_model_input = [
+            latents_noisy,
+        ] * num_repeats 
+
+        if use_t_plus:
+
+            # random timestamp for the second diffusion model
+            latents_noisy_second = self.sd_scheduler.add_noise(sd_latents, sd_noise, t_plus)
+
+            latents_model_input += [
+                latents_noisy_second,
+            ] 
+
+        latents_model_input = torch.cat(
+            latents_model_input,
+            dim=0,
+        )
+
+        # prepare timestep input for UNet ################################################################################################
+        t_expand = [
+            t,
+        ] * num_repeats
+
+        if use_t_plus:
+            t_expand += [
+                t_plus,
+            ]
+
+        t_expand = torch.cat(
+            t_expand,
+            dim=0,
+        )
+
+        # forward pass ################################################################################################
+        noise_pred = self.sd_unet(
+            latents_model_input.to(self.weights_dtype),
+            t_expand.to(self.weights_dtype),
+            encoder_hidden_states=text_embeddings.to(self.weights_dtype),
+        ).sample.to(sd_latents.dtype)
+
+
+        # split the noise_pred
+        if self.sd_use_perp_neg:
+            noise_pred_text    = noise_pred[0 * img_batch_size: 1 * img_batch_size]
+            noise_pred_uncond  = noise_pred[1 * img_batch_size: 2 * img_batch_size]
+            noise_pred_vd_neg  = noise_pred[2 * img_batch_size: 4 * img_batch_size]
+            noise_pred_second  = noise_pred[4 * img_batch_size: 5 * img_batch_size] if use_t_plus else noise_pred_text
+        else:
+            noise_pred_text    = noise_pred[0 * img_batch_size: 1 * img_batch_size]
+            noise_pred_uncond  = noise_pred[1 * img_batch_size: 2 * img_batch_size]
+            noise_pred_vd_neg  = None
+            noise_pred_second  = noise_pred[2 * img_batch_size: 3 * img_batch_size] if use_t_plus else noise_pred_text
+
+        return noise_pred_text, noise_pred_uncond, noise_pred_vd_neg, noise_pred_second
+
+
+    def sd_grad_asd(
+        self,
+        rgb: Float[Tensor, "B H W C"],
+        prompt_utils: PromptProcessorOutput,
+        elevation: Float[Tensor, "B"],
+        azimuth: Float[Tensor, "B"],
+        camera_distances: Float[Tensor, "B"],
+        c2w: Float[Tensor, "B 4 4"],
+        rgb_as_latents: bool = False,
+        fovy=None,
+        rgb_2nd: Optional[Float[Tensor, "B H W C"]] = None,
+        azimuth_2nd: Optional[Float[Tensor, "B"]] = None,
+        **kwargs,
+    ):
+        # determine if dual rendering is enabled
+        is_dual = True if rgb_2nd is not None else False
+
+        view_batch_size = rgb.shape[0] # the number of views 
+        img_batch_size = rgb.shape[0] 
+        rgb_BCHW = rgb.permute(0, 3, 1, 2)
+        # special case for dual rendering
+        if is_dual:
+            img_batch_size *= 2
+            rgb_2nd_BCHW = rgb_2nd.permute(0, 3, 1, 2)
+            assert azimuth_2nd is not None, "azimuth_2nd is required for dual rendering"
+
+        ################################################################################################
+        # the following is specific to MVDream
+        sd_latents = self.sd_get_latents(
+            rgb_BCHW,
+            rgb_BCHW_2nd=rgb_2nd_BCHW if is_dual else None,
+            rgb_as_latents=rgb_as_latents,
+        )
+
+        # prepare noisy input
+        sd_noise = torch.randn_like(sd_latents)
+
+        # prepare text embeddings
+        if not self.sd_use_perp_neg:
+            text_embeddings = prompt_utils.get_text_embeddings(
+                elevation, azimuth, camera_distances, 
+                view_dependent_prompting=self.cfg.sd_view_dependent_prompting,
+                use_2nd_uncond = False
+            )
+            text_batch_size = text_embeddings.shape[0] // 2
+            
+            # repeat the text embeddings w.r.t. the number of views
+            text_embeddings_vd     = text_embeddings[0 * text_batch_size: 1 * text_batch_size].repeat_interleave(
+                view_batch_size // text_batch_size, dim = 0
+            )
+            text_embeddings_uncond = text_embeddings[1 * text_batch_size: 2 * text_batch_size].repeat_interleave(
+                view_batch_size // text_batch_size, dim = 0
+            )
+            text_embeddings_vd_neg = None
+
+            # if dual rendering is enabled, fetch the text embeddings for the 2nd rendering
+            if is_dual:
+                text_embeddings_vd_2nd = prompt_utils.get_text_embeddings(
+                    elevation, azimuth_2nd, camera_distances,
+                    view_dependent_prompting=self.cfg.sd_view_dependent_prompting,
+                    use_2nd_uncond = False
+                )
+                # we only need the view-dependent text embeddings
+                text_embeddings_vd_2nd = text_embeddings_vd_2nd[0 * text_batch_size: 1 * text_batch_size].repeat_interleave(
+                    view_batch_size // text_batch_size, dim = 0
+                )
+
+            neg_guidance_weights = None
+        else:
+            assert prompt_utils.use_perp_neg # just to make sure
+            (
+                text_embeddings,
+                neg_guidance_weights,
+            ) = prompt_utils.get_text_embeddings_perp_neg(
+                elevation, azimuth, camera_distances, 
+                view_dependent_prompting=self.cfg.sd_view_dependent_prompting,
+                use_2nd_uncond = False
+            )
+
+            raise NotImplementedError("The perp_neg is not implemented yet")
+        
+            # text_batch_size = text_embeddings.shape[0] // 4
+            # neg_guidance_weights = neg_guidance_weights * -1 * self.cfg.sd_guidance_perp_neg # multiply by a negative value to control its magnitude
+
+            # text_embeddings_vd     = text_embeddings[0 * text_batch_size: 1 * text_batch_size].repeat_interleave(
+            #     view_batch_size // text_batch_size, dim = 0
+            # )
+            # text_embeddings_uncond = text_embeddings[1 * text_batch_size: 2 * text_batch_size].repeat_interleave(
+            #     view_batch_size // text_batch_size, dim = 0
+            # )
+            # text_embeddings_vd_neg = text_embeddings[2 * text_batch_size: 4 * text_batch_size].repeat_interleave(
+            #     view_batch_size // text_batch_size, dim = 0
+            # )
+
+            # if is_dual: # repeat the neg_guidance_weights
+            #     neg_guidance_weights = neg_guidance_weights.repeat(2, 1)
+
+        assert self.min_step is not None and self.max_step is not None
+        with torch.no_grad():
+
+            if is_dual and self.cfg.dual_render_sync_t:
+                t = torch.randint(
+                    self.min_step,
+                    self.max_step + 1,
+                    [view_batch_size],
+                    dtype=torch.long,
+                    device=self.device,
+                )
+                
+                t = t.repeat(2) # repeat for the 1st and 2nd renderings
+
+                # bigger timestamp, the following is specific to ASD
+                # as t_plus is randomly sampled in ASD, 
+                # sample different t_plus for the 1st and 2nd renderings covers larger range
+                t_plus = self.get_t_plus(t, module="sd")
+                
+            else:
+                t = torch.randint(
+                    self.min_step,
+                    self.max_step + 1,
+                    [img_batch_size],
+                    dtype=torch.long,
+                    device=self.device,
+                )
+
+                # bigger timestamp, the following is specific to ASD
+                t_plus = self.get_t_plus(t, module="sd")
+
+            # perform the noise prediction
+            noise_pred_text, noise_pred_uncond, noise_pred_vd_neg, noise_pred_second = self._sd_noise_pred(
+                sd_latents,
+                sd_noise,
+                t,
+                t_plus,
+                text_embeddings_vd,
+                text_embeddings_uncond,
+                text_embeddings_vd_2nd = text_embeddings_vd_2nd if is_dual else None,
+                text_embeddings_vd_neg = text_embeddings_vd_neg if self.sd_use_perp_neg else None,
+                is_dual = is_dual,
+            )
+
+                
+        # determine the weight
+        if self.cfg.weighting_strategy == "sds":
+            # w(t), sigma_t^2
+            w = (1 - self.alphas[t]).view(-1, 1, 1, 1)
+        elif self.cfg.weighting_strategy == "uniform":
+            w = 1
+        elif self.cfg.weighting_strategy == "fantasia3d":
+            w = (self.alphas[t] ** 0.5 * (1 - self.alphas[t])).view(-1, 1, 1, 1)
+        else:
+            raise ValueError(
+                f"Unknown weighting strategy: {self.cfg.weighting_strategy}"
+            )
+
+        # aggregate the noise_pred
+        eps_pos = noise_pred_text - noise_pred_uncond
+        if neg_guidance_weights is not None: # use_perp_neg is enabled
+            accum_grad = 0
+            n_negative_prompts = neg_guidance_weights.shape[-1]
+            for i in range(n_negative_prompts):
+                eps_vd_neg = noise_pred_vd_neg[i::n_negative_prompts] - noise_pred_uncond
+                accum_grad += neg_guidance_weights[:, i].view(
+                    -1, *[1] * (eps_vd_neg.ndim - 1)
+                ) * perpendicular_component(eps_vd_neg, eps_pos) # eps_vd_neg # v2
+
+            # noise_pred_p = (eps_pos) * guidenace_scale + noise_pred_uncond + accum_grad
+            noise_pred_first = (eps_pos + accum_grad) * self.cfg.sd_guidance_scale + noise_pred_uncond 
+
+        else: # if not use_perp_neg
+            noise_pred_first = eps_pos                * self.cfg.sd_guidance_scale + noise_pred_uncond
+
+        grad = (noise_pred_first - noise_pred_second) * w
+        grad = torch.nan_to_num(grad)
+        # clip grad for stability?
+        if self.grad_clip_val is not None:
+            grad = torch.clamp(grad, -self.grad_clip_val, self.grad_clip_val)
+
+        # reparameterization trick
+        # d(loss)/d(latents) = latents - target = latents - (latents - grad) = grad
+        target = (sd_latents - grad).detach()
+        if not is_dual:
+            loss_asd = 0.5 * F.mse_loss(sd_latents, target, reduction="sum") / view_batch_size
+            return loss_asd, grad.norm()
+        else:
+            # split the grad into two parts
+            loss_asd = torch.stack(
+                [
+                    0.5 * F.mse_loss(sd_latents[:view_batch_size], target[:view_batch_size], reduction="sum") / view_batch_size,
+                    0.5 * F.mse_loss(sd_latents[view_batch_size:], target[view_batch_size:], reduction="sum") / view_batch_size,
+                ]
+            )
+            grad_norm = torch.stack(
+                [
+                    grad[:view_batch_size].norm(),
+                    grad[view_batch_size:].norm(),
+                ]
+            )
+            return loss_asd, grad_norm
+            
+################################################################################################
+
 
     def _one_of_n_view(
         self,
@@ -815,7 +970,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         idx += torch.arange(0, view_batch_size, self.cfg.mv_n_view, device=self.device, dtype=torch.long)
         return idx
 
-################################################################################################
+
     def __call__(
         self,
         rgb: Float[Tensor, "B H W C"],
