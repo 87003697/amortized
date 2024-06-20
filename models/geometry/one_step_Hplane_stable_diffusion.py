@@ -77,11 +77,11 @@ class StableDiffusionHplaneAttention(BaseImplicitGeometry):
             raise ValueError(f"Unknown backbone {self.cfg.backbone}")
 
         # set up the mlp
-        if self.cfg.interpolate_feat in ["v2"]:
+        if self.cfg.interpolate_feat in ["v2", "v3"]:
             input_dim = self.space_generator.output_dim * 3 
         else:
             input_dim = self.space_generator.output_dim * 2
-            
+
         self.sdf_network = get_mlp(
             input_dim,
             1,
