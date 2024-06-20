@@ -173,7 +173,7 @@ def sample_from_quaplanes(plane_features, coordinates, mode='bilinear', padding_
 
 def sample_from_Hplanes(plane_features, coordinates, mode='bilinear', padding_mode='zeros', box_warp=2, interpolate_feat: Optional[str] = 'None'):
     assert padding_mode == 'zeros'
-    assert interpolate_feat in [None, "v1"]
+    assert interpolate_feat in [None, "v1", "v2"]
 
     N, n_planes, C, H, W = plane_features.shape
     _, M, _ = coordinates.shape
@@ -185,36 +185,59 @@ def sample_from_Hplanes(plane_features, coordinates, mode='bilinear', padding_mo
     output_features = torch.nn.functional.grid_sample(plane_features, projected_coordinates.float(), mode=mode, padding_mode=padding_mode, align_corners=False)
     output_features = output_features.permute(0, 3, 2, 1).reshape(N, n_planes, M, C)
     
-    # the following is from https://github.com/3DTopia/OpenLRM/blob/d4caebbea3f446904d9faafaf734e797fcc4ec89/lrm/models/rendering/synthesizer.py#L42
-    output_features = output_features.permute(0, 2, 1, 3).reshape(N, M, n_planes*C)
+    if interpolate_feat in [None, "v1"]:
+        # the following is from https://github.com/3DTopia/OpenLRM/blob/d4caebbea3f446904d9faafaf734e797fcc4ec89/lrm/models/rendering/synthesizer.py#L42
+        output_features = output_features.permute(0, 2, 1, 3).reshape(N, M, n_planes*C)
 
-    # decide whether to use front or back feature
-    # front
-    front_feat_idx = torch.cat(
-        [
-            torch.arange(0 * C, 1 * C), 
-            torch.arange(1 * C, 2 * C)
-        ]
-    ).to(coordinates.device)
-    # back
-    back_feat_idx = torch.cat(
-        [
-            torch.arange(0 * C, 1 * C),
-            torch.arange(2 * C, 3 * C)
-        ]
-    ).to(coordinates.device)
+        # decide whether to use front or back feature
+        # front
+        front_feat_idx = torch.cat(
+            [
+                torch.arange(0 * C, 1 * C), 
+                torch.arange(1 * C, 2 * C)
+            ]
+        ).to(coordinates.device)
+        # back
+        back_feat_idx = torch.cat(
+            [
+                torch.arange(0 * C, 1 * C),
+                torch.arange(2 * C, 3 * C)
+            ]
+        ).to(coordinates.device)
 
-    if not interpolate_feat:
-        output_features_new = torch.zeros(N, M, (n_planes - 1) * C, device=coordinates.device)
-        mask = coordinates[..., 0] > 0
-        output_features_new[mask]  = 1 * output_features[mask][..., front_feat_idx]
-        output_features_new[~mask] = 1 * output_features[~mask][..., back_feat_idx]
-    else:
-        alpha_front = 0.5 + 0.5 * coordinates[..., :1]
-        alpha_back  = 0.5 - 0.5 * coordinates[..., :1]
-        output_features_new = alpha_front * output_features[..., front_feat_idx] + alpha_back * output_features[..., back_feat_idx]
 
-    return output_features_new.contiguous()
+        if interpolate_feat in [None]:
+
+            output_features_new = torch.zeros(N, M, (n_planes - 1) * C, device=coordinates.device)
+            mask = coordinates[..., 0] > 0
+            output_features_new[mask]  = 1 * output_features[mask][..., front_feat_idx]
+            output_features_new[~mask] = 1 * output_features[~mask][..., back_feat_idx]
+
+            return output_features_new.contiguous()
+
+        elif interpolate_feat in ["v1"]:
+            output_features = output_features.permute(0, 2, 1, 3).reshape(N, M, n_planes*C)
+
+            alpha_front = 0.5 + 0.5 * coordinates[..., :1]
+            alpha_back  = 0.5 - 0.5 * coordinates[..., :1]
+            output_features_new = alpha_front * output_features[..., front_feat_idx] + alpha_back * output_features[..., back_feat_idx]
+
+            return output_features_new.contiguous()
+
+    elif interpolate_feat in ["v2"]:
+        # the following is from v1
+        alpha_front = 0.0 + 1.0 * coordinates[..., 0:1].clamp(0, 1) # alpha = 0 for x < 0, alpha = x for 0 <= x <= 1, alpha = 1 for x > 1
+        alpha_back  = 0.0 - 1.0 * coordinates[..., 0:1].clamp(-1, 0) # alpha = 0 for x > 0, alpha = -x for -1 <= x <= 0, alpha = 1 for x < -1
+        # the following is for v2
+        alpha_side  = 1.0 - 1.0 * coordinates[..., 1:2].abs() # alpha = 1 - |y| for -1 <= y <= 1
+        alpha = torch.cat([alpha_front, alpha_back, alpha_side], dim=-1).permute(0, 2, 1).unsqueeze(-1)
+        output_features = (output_features * alpha).permute(0, 2, 1, 3).reshape(N, M, n_planes*C)
+
+        return output_features.contiguous()
+
+
+
+
 
 
 def get_trilinear_feature(
