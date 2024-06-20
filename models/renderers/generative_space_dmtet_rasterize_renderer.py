@@ -37,6 +37,9 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         context_type: str = "cuda"
         isosurface_method: str = "mt" # "mt" or "mc-cpu"
 
+        enable_bg_rays: bool = False
+        
+
     cfg: Config
 
     def configure(
@@ -75,6 +78,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         space_cache: Optional[Float[Tensor, "B ..."]] = None,
         text_embed: Optional[Float[Tensor, "B C"]] = None,
         render_rgb: bool = True,
+        rays_d_rasterize: Optional[Float[Tensor, "B H W 3"]] = None,
         **kwargs
     ) -> Dict[str, Float[Tensor, "..."]]:
 
@@ -205,14 +209,23 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 gb_rgb_fg = torch.zeros(num_views_per_batch, height, width, 3).to(rgb_fg)
                 gb_rgb_fg[selector] = rgb_fg
 
+
                 # background
+                if self.cfg.enable_bg_rays:
+                    assert rays_d_rasterize is not None
+                    view_dirs = rays_d_rasterize[batch_idx * num_views_per_batch : (batch_idx + 1) * num_views_per_batch]
+                else:
+                    view_dirs = gb_viewdirs
+
                 if hasattr(self.background, "enabling_hypernet") and self.background.enabling_hypernet:
                     gb_rgb_bg = self.background(
-                        dirs=gb_viewdirs, 
+                        dirs=view_dirs,
                         text_embed=text_embed if "text_embed_bg" not in kwargs else kwargs["text_embed_bg"]
                     )
                 else:
-                    gb_rgb_bg = self.background(dirs=gb_viewdirs)
+                    gb_rgb_bg = self.background(
+                        dirs=view_dirs,
+                    )
 
                 gb_rgb = torch.lerp(gb_rgb_bg, gb_rgb_fg, mask.float())
                 gb_rgb_aa = self.ctx.antialias(gb_rgb, rast, v_pos_clip, mesh.t_pos_idx)

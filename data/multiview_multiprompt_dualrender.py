@@ -110,7 +110,11 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
         self.directions_unit_focals = [
             get_ray_directions(H=height, W=width, focal=1.0)
             for (height, width) in zip(self.ray_heights, self.ray_widths)
-        ] 
+        ]
+        self._directions_unit_focals_rasterize = [
+            get_ray_directions(H=height, W=width, focal=1.0)
+            for (height, width) in zip(self.heights, self.widths)
+        ]
         ##############################################################################################################
         # the following config is intialized for the 1st iteration
         self.batch_size: int = self.batch_sizes[0]
@@ -119,6 +123,7 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
         self.ray_height: int = self.ray_heights[0]
         self.ray_width: int = self.ray_widths[0]
         self.directions_unit_focal = self.directions_unit_focals[0]
+        self._directions_unit_focal_rasterize = self._directions_unit_focals_rasterize[0]
         # the following config is fixed for the whole training process
         self.elevation_range: Tuple[float, float] = self.cfg.elevation_range
         self.azimuth_range: Tuple[float, float] = self.cfg.azimuth_range
@@ -147,6 +152,7 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
         self.ray_height = self.ray_heights[size_index]
         self.ray_width = self.ray_widths[size_index]
         self.directions_unit_focal = self.directions_unit_focals[size_index]
+        self._directions_unit_focal_rasterize = self._directions_unit_focals_rasterize[size_index]
         threestudio.debug(
             f"Updated batch_size={self.batch_size}, height={self.height}, width={self.width}, ray_height={self.ray_height}, ray_width={self.ray_width}"
         )
@@ -265,8 +271,16 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
             directions[:, :, :, :2] / focal_length[:, None, None, None]
         )
 
+        directions_rasterize: Float[Tensor, "B H W 3"] = self._directions_unit_focal_rasterize[
+            None, :, :, :
+        ].repeat(n_views, 1, 1, 1)
+        directions_rasterize[:, :, :, :2] = (
+            directions_rasterize[:, :, :, :2] / focal_length[:, None, None, None]
+        )
+
         # Importance note: the returned rays_d MUST be normalized!
         rays_o, rays_d = get_rays(directions, c2w, keepdim=True)
+        _, rays_d_rasterize = get_rays(directions_rasterize, c2w, keepdim=True)
 
         proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(
             fovy, self.width / self.height, 0.1, 1000.0
@@ -288,7 +302,8 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
             "width": self.width,
             "fovy": fovy_deg,
             "prompt": prompts,
-            "noise": torch.randn(1, *self.cfg.dim_gaussian) if not self.cfg.pure_zeros else torch.zeros(1, *self.cfg.dim_gaussian)
+            "noise": torch.randn(1, *self.cfg.dim_gaussian) if not self.cfg.pure_zeros else torch.zeros(1, *self.cfg.dim_gaussian),
+            "rays_d_rasterize":  rays_d_rasterize
         }
     
     def _train_collate(self, batch) -> Dict[str, Any]:
@@ -386,8 +401,16 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
             directions[:, :, :, :2] / focal_length[:, None, None, None]
         )
 
+        directions_rasterize: Float[Tensor, "B H W 3"] = self._directions_unit_focal_rasterize[
+            None, :, :, :
+        ].repeat(self.batch_size, 1, 1, 1)
+        directions_rasterize[:, :, :, :2] = (
+            directions_rasterize[:, :, :, :2] / focal_length[:, None, None, None]
+        )
+
         # Importance note: the returned rays_d MUST be normalized!
         rays_o, rays_d = get_rays(directions, c2w, keepdim=True)
+        _, rays_d_rasterize = get_rays(directions_rasterize, c2w, keepdim=True)
 
         proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(
             fovy, self.width / self.height, 0.1, 1000.0
@@ -408,7 +431,8 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
             "width": self.width,
             "fovy": fovy_deg,
             "prompt": prompts,
-            "noise": torch.randn(real_batch_size, *self.cfg.dim_gaussian) if not self.cfg.pure_zeros else torch.zeros(real_batch_size, *self.cfg.dim_gaussian)
+            "noise": torch.randn(real_batch_size, *self.cfg.dim_gaussian) if not self.cfg.pure_zeros else torch.zeros(real_batch_size, *self.cfg.dim_gaussian),
+            "rays_d_rasterize":  rays_d_rasterize
         }
 
 
