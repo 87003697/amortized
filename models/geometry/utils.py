@@ -226,8 +226,8 @@ def sample_from_Hplanes(plane_features, coordinates, mode='bilinear', padding_mo
 
     elif interpolate_feat in ["v2"]:
         # the following is from v1
-        alpha_front = 0.0 + 1.0 * coordinates[..., 0:1].clamp(0, 1) # alpha = 0 for x < 0, alpha = x for 0 <= x <= 1, alpha = 1 for x > 1
-        alpha_back  = 0.0 - 1.0 * coordinates[..., 0:1].clamp(-1, 0) # alpha = 0 for x > 0, alpha = -x for -1 <= x <= 0, alpha = 1 for x < -1
+        alpha_front = 0.5 + 0.5 * coordinates[..., 0:1]
+        alpha_back  = 0.5 - 0.5 * coordinates[..., 0:1]
         # the following is for v2
         alpha_side  = 1.0 - 1.0 * coordinates[..., 1:2].abs() # alpha = 1 - |y| for -1 <= y <= 1
         alpha = torch.cat([alpha_side, alpha_front, alpha_back], dim=-1).permute(0, 2, 1).unsqueeze(-1)
