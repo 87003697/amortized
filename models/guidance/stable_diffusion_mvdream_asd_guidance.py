@@ -48,6 +48,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
         # the following is specific to stable diffusion
         sd_view_dependent_prompting: bool = True
+        sd_all_views: bool = False
         sd_image_size: int = 512
         sd_guidance_perp_neg: float = 0.0
         sd_guidance_scale: float = 7.5
@@ -87,65 +88,72 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
     def configure(self) -> None:
 
         ################################################################################################
-        threestudio.info(f"Loading Stable Diffusion ...")
+        if self.cfg.sd_weight > 0:
+            threestudio.info(f"Loading Stable Diffusion ...")
 
-        self.weights_dtype = (
-            torch.float16 if self.cfg.half_precision_weights else torch.float32
-        )
+            self.weights_dtype = (
+                torch.float16 if self.cfg.half_precision_weights else torch.float32
+            )
 
-        pipe_kwargs = {
-            "tokenizer": None,
-            "safety_checker": None,
-            "feature_extractor": None,
-            "requires_safety_checker": False,
-            "torch_dtype": self.weights_dtype,
-        }
-        pipe = StableDiffusionPipeline.from_pretrained(
-            self.cfg.sd_model_name_or_path,
-            **pipe_kwargs,
-        ).to(self.device)
-        del pipe.text_encoder
-        cleanup()
+            pipe_kwargs = {
+                "tokenizer": None,
+                "safety_checker": None,
+                "feature_extractor": None,
+                "requires_safety_checker": False,
+                "torch_dtype": self.weights_dtype,
+            }
+            pipe = StableDiffusionPipeline.from_pretrained(
+                self.cfg.sd_model_name_or_path,
+                **pipe_kwargs,
+            ).to(self.device)
+            del pipe.text_encoder
+            cleanup()
 
-        # Create model
-        self.sd_vae = pipe.vae.eval().to(self.device)
-        self.sd_unet = pipe.unet.eval().to(self.device)
+            # Create model
+            self.sd_vae = pipe.vae.eval().to(self.device)
+            self.sd_unet = pipe.unet.eval().to(self.device)
 
-        for p in self.sd_vae.parameters():
-            p.requires_grad_(False)
-        for p in self.sd_unet.parameters():
-            p.requires_grad_(False)
+            for p in self.sd_vae.parameters():
+                p.requires_grad_(False)
+            for p in self.sd_unet.parameters():
+                p.requires_grad_(False)
 
-        self.sd_scheduler = DDPMScheduler.from_pretrained(
-            self.cfg.sd_model_name_or_path,
-            subfolder="scheduler",
-            torch_dtype=self.weights_dtype,
-        )
+            self.sd_scheduler = DDPMScheduler.from_pretrained(
+                self.cfg.sd_model_name_or_path,
+                subfolder="scheduler",
+                torch_dtype=self.weights_dtype,
+            )
 
-        self.sd_use_perp_neg = self.cfg.sd_guidance_perp_neg != 0
+            self.sd_use_perp_neg = self.cfg.sd_guidance_perp_neg != 0
+        else:
+            threestudio.info("Stable Diffusion is disabled.")
 
         ################################################################################################
-        threestudio.info(f"Loading Multiview Diffusion ...")
+        if self.cfg.mv_weight > 0:
+            threestudio.info(f"Loading Multiview Diffusion ...")
 
-        self.mv_model = build_model(
-            self.cfg.mv_model_name_or_path,
-            ckpt_path=self.cfg.mv_ckpt_path
-        ).to(self.device)
-        for p in self.mv_model.parameters():
-            p.requires_grad_(False)
+            self.mv_model = build_model(
+                self.cfg.mv_model_name_or_path,
+                ckpt_path=self.cfg.mv_ckpt_path
+            ).to(self.device)
+            for p in self.mv_model.parameters():
+                p.requires_grad_(False)
 
-        if hasattr(self.mv_model, "cond_stage_model"):
-            # delete unused models
-            del self.mv_model.cond_stage_model # text encoder
-            cleanup()
+            if hasattr(self.mv_model, "cond_stage_model"):
+                # delete unused models
+                del self.mv_model.cond_stage_model # text encoder
+                cleanup()
+
+
+        else:
+            threestudio.info("Multiview Diffusion is disabled.")
 
         ################################################################################################
         # the folowing is shared between mvdream and stable diffusion
-        self.alphas = self.mv_model.alphas_cumprod # should be the same as self.scheduler.alphas_cumprod
+        self.alphas = self.mv_model.alphas_cumprod if self.cfg.mv_weight > 0 else self.sd_scheduler.alphas_cumprod # should be the same as self.scheduler.alphas_cumprod
         self.grad_clip_val: Optional[float] = None
         self.num_train_timesteps = 1000
         self.set_min_max_steps()  # set to default value
-
 
     def get_t_plus(
         self, 
@@ -1050,19 +1058,24 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         # due to the computation cost
         # the following is specific to Stable Diffusion
         # for any n_view, select only one view for the guidance
-        idx = self._one_of_n_view(
-            view_batch_size=rgb.shape[0]
-        )
+        if self.cfg.sd_all_views:
+            idx = torch.arange(0, rgb.shape[0], device=self.device, dtype=torch.long)
+            if is_dual:
+                idx_2nd = torch.arange(0, rgb_2nd.shape[0], device=self.device, dtype=torch.long)
+        else: # only select one view for the guidance
+            idx = self._one_of_n_view(
+                view_batch_size=rgb.shape[0]
+            )
 
-        # special case for dual rendering
-        if is_dual:
-            if self.cfg.dual_render_sync_view_sd: # select the same view for the 1st and 2nd renderings
-                idx_2nd = idx
-            else:                                 # select different views for the 1st and 2nd renderings
-                idx_2nd = self._one_of_n_view(
-                    view_batch_size=rgb_2nd.shape[0],
-                    differ_from_idx=idx
-                )
+            # special case for dual rendering
+            if is_dual:
+                if self.cfg.dual_render_sync_view_sd: # select the same view for the 1st and 2nd renderings
+                    idx_2nd = idx
+                else:                                 # select different views for the 1st and 2nd renderings
+                    idx_2nd = self._one_of_n_view(
+                        view_batch_size=rgb_2nd.shape[0],
+                        differ_from_idx=idx
+                    )
 
         # select only one view for the guidance
         if self.cfg.sd_weight > 0:
