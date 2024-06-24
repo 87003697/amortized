@@ -54,6 +54,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         sd_guidance_scale: float = 7.5
         sd_weight: float = 1.
         sd_1st_render_only: bool = False
+        sd_weighting_strategy: str = "uniform" # ASD is suitable for uniform weighting, but can be extended to other strategies
 
         # the following is shared between mvdream and stable diffusion
         grad_clip: Optional[
@@ -64,7 +65,6 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         # the following is specific to ASD
         min_step_percent: float = 0.02
         max_step_percent: float = 0.98
-        weighting_strategy: str = "uniform" # ASD is suitable for uniform weighting, but can be extended to other strategies
 
         plus_schedule: str = "linear"  # linear or sqrt_<bias>
 
@@ -73,6 +73,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         mv_plus_ratio: float = 0.1
         sd_plus_random: bool = True
         sd_plus_ratio: float = 0.1
+        mv_weighting_strategy: str = "uniform" # ASD is suitable for uniform weighting, but can be extended to other strategies
 
         # the following is specific to the compatibility with dual rendering
         dual_render_sync_t: bool = False
@@ -532,18 +533,18 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             )
 
         # determine the weight
-        if self.cfg.weighting_strategy == "sds":
+        if self.cfg.mv_weighting_strategy == "sds":
             # w(t), sigma_t^2
             w = (1 - self.alphas[t]).view(-1, 1, 1, 1)
-        elif self.cfg.weighting_strategy == "uniform":
+        elif self.cfg.mv_weighting_strategy == "uniform":
             w = 1
-        elif self.cfg.weighting_strategy == "fantasia3d":
+        elif self.cfg.mv_weighting_strategy == "fantasia3d":
             w = (self.alphas[t] ** 0.5 * (1 - self.alphas[t])).view(-1, 1, 1, 1)
-        elif self.cfg.weighting_strategy == "sds_sqrt":
+        elif self.cfg.mv_weighting_strategy == "sds_sqrt":
             w = ((1 - self.alphas[t]) ** 0.5).view(-1, 1, 1, 1)
         else:
             raise ValueError(
-                f"Unknown weighting strategy: {self.cfg.weighting_strategy}"
+                f"Unknown weighting strategy: {self.cfg.mv_weighting_strategy}"
             )
 
         noise_pred_first = noise_pred_uncond + self.cfg.mv_guidance_scale * (
@@ -885,18 +886,18 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
                 
         # determine the weight
-        if self.cfg.weighting_strategy == "sds":
+        if self.cfg.sd_weighting_strategy == "sds":
             # w(t), sigma_t^2
             w = (1 - self.alphas[t]).view(-1, 1, 1, 1)
-        elif self.cfg.weighting_strategy == "uniform":
+        elif self.cfg.sd_weighting_strategy == "uniform":
             w = 1
-        elif self.cfg.weighting_strategy == "fantasia3d":
+        elif self.cfg.sd_weighting_strategy == "fantasia3d":
             w = (self.alphas[t] ** 0.5 * (1 - self.alphas[t])).view(-1, 1, 1, 1)
-        elif self.cfg.weighting_strategy == "sds_sqrt":
+        elif self.cfg.sd_weighting_strategy == "sds_sqrt":
             w = ((1 - self.alphas[t]) ** 0.5).view(-1, 1, 1, 1)
         else:
             raise ValueError(
-                f"Unknown weighting strategy: {self.cfg.weighting_strategy}"
+                f"Unknown weighting strategy: {self.cfg.sd_weighting_strategy}"
             )
 
         # aggregate the noise_pred
