@@ -173,7 +173,7 @@ def sample_from_quaplanes(plane_features, coordinates, mode='bilinear', padding_
 
 def sample_from_Hplanes(plane_features, coordinates, mode='bilinear', padding_mode='zeros', box_warp=2, interpolate_feat: Optional[str] = 'None'):
     assert padding_mode == 'zeros'
-    assert interpolate_feat in [None, "v1", "v2", "v3"]
+    assert interpolate_feat in [None, "v1", "v2", "v3", "v4"]
 
     N, n_planes, C, H, W = plane_features.shape
     _, M, _ = coordinates.shape
@@ -264,7 +264,35 @@ def sample_from_Hplanes(plane_features, coordinates, mode='bilinear', padding_mo
 
         return output_features.contiguous()
 
+    elif interpolate_feat in ["v4"]:
+        # the following is from v3
+        # front mask ########################################################
+        front_thres = 0.5
+        # part A: from front_thres to 1, decrease alpha from 1 to 0
+        alpha_partA = 1 - (coordinates[..., 0:1] - front_thres) / (1 - front_thres)
+        # part B: from -1 to front_thres, increase alpha from 0 to 1
+        alpha_partB = (coordinates[..., 0:1] + 1) / (front_thres + 1)
+        # determine the mask
+        partA_mask = (coordinates[..., 0:1] > front_thres).float()
+        # combine part A and part B
+        alpha_front = alpha_partA * partA_mask + alpha_partB * (1 - partA_mask)
+        # back mask ########################################################
+        back_thres = -0.5
+        # part A: from back_thres to 1, decrease alpha from 1 to 0
+        alpha_partA = 1 - (coordinates[..., 0:1] - back_thres) / (1 - back_thres)
+        # part B: from -1 to back_thres, increase alpha from 0 to 1
+        alpha_partB = (coordinates[..., 0:1] + 1) / (back_thres + 1)
+        # determine the mask
+        partA_mask = (coordinates[..., 0:1] > back_thres).float()
+        # combine part A and part B
+        alpha_back = alpha_partA * partA_mask + alpha_partB * (1 - partA_mask)
+        # side mask ########################################################
+        alpha_side = torch.ones_like(coordinates[..., 1:2])
+        # we sum up the feat instead of concatenating
+        alpha = torch.cat([alpha_side, alpha_front, alpha_back,], dim=-1).permute(0, 2, 1).unsqueeze(-1)
+        output_features = (output_features * alpha).sum(dim=1, keepdim=True).reshape(N, M, C)
 
+        return output_features.contiguous()
 
 
 def get_trilinear_feature(
