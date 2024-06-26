@@ -12,7 +12,6 @@ from threestudio.utils.base import BaseObject
 from threestudio.utils.typing import *
 from threestudio.utils.misc import barrier, cleanup
 
-from tqdm import tqdm
 from functools import partial
 
 from threestudio.models.prompt_processors.base import (
@@ -20,7 +19,6 @@ from threestudio.models.prompt_processors.base import (
     shifted_expotional_decay
 )
 from threestudio.utils.misc import get_rank
-from torch.multiprocessing import Pool
 
 from itertools import cycle
 from .utils import _load_prompt_embedding, hash_prompt
@@ -82,8 +80,7 @@ class MultiPromptProcessor(BaseObject):
         use_local_text_embeddings: bool = False
         use_view_dependent_text_embeddings: Optional[List[str]] = None #field(default_factory=lambda: [])
 
-        # whether to split the text embeddings across GPUs
-        gpu_split: bool = True
+
 
     cfg: Config
 
@@ -169,7 +166,11 @@ class MultiPromptProcessor(BaseObject):
             self.negative_prompts_vd_2nd = self._view_dependent_text_embeddings(self.negative_prompt_2nd)
 
     @staticmethod
-    def spawn_func(pretrained_model_name_or_path, prompts, cache_dir, tokenizer = None, text_encoder = None):
+    def func(pretrained_model_name_or_path, prompts, cache_dir, tokenizer = None, text_encoder = None):
+        raise NotImplementedError
+    
+    @staticmethod
+    def spawn_func(pretrained_model_name_or_path, prompts, cache_dir):
         raise NotImplementedError
     
     def _view_dependent_text_embeddings(self, prompt: str) -> List[str]:
@@ -181,9 +182,9 @@ class MultiPromptProcessor(BaseObject):
         os.makedirs(self._cache_dir, exist_ok=True)
 
         rank = get_rank()
-        if self.cfg.gpu_split:
+        num_gpus = torch.cuda.device_count()
+        if num_gpus > 1:
             # each process only has a subset of the prompt library!
-            num_gpus = torch.cuda.device_count()
             prompt_library = prompt_library[rank::num_gpus]
 
         # for each prompt in the prompt library
@@ -234,43 +235,72 @@ class MultiPromptProcessor(BaseObject):
 
         if len(prompts_to_process) > 0:
 
-            # load tokenizer and text encoder for multiprocessing
-            from transformers import AutoTokenizer, CLIPTextModel
-            os.environ["TOKENIZERS_PARALLELISM"] = "false"
-            tokenizer = AutoTokenizer.from_pretrained(
-                self.cfg.pretrained_model_name_or_path, subfolder="tokenizer"
-            )
-            text_encoder = CLIPTextModel.from_pretrained(
-                self.cfg.pretrained_model_name_or_path,
-                subfolder="text_encoder",
-                device_map="auto",
-            )
-
-            for p in text_encoder.parameters():
-                p.requires_grad_(False)
-
             if self.cfg.spawn:
-                threestudio.info(f"Spawning {len(prompts_to_process)} processes to process prompts.")
-                # multiprocessing
-                ctx = mp.get_context("spawn")
-                subprocess = ctx.Process(
-                    target=self.spawn_func,
-                    args=(
+                # # try 1-st approach
+                # threestudio.info(f"Spawning {len(prompts_to_process)} processes to process prompts.")
+                # # multiprocessing
+                # ctx = mp.get_context("spawn")
+                # subprocess = ctx.Process(
+                #     target=self.spawn_func,
+                #     args=(
+                #         self.cfg.pretrained_model_name_or_path,
+                #         prompts_to_process,
+                #         self._cache_dir,
+                #     ),
+                # )
+
+                # subprocess.start()
+                # subprocess.join()
+                # threestudio.info(f"Finished processing prompts.")
+
+                # # try 2-nd approach
+                # from torch.multiprocessing import Pool, set_start_method
+                # set_start_method("spawn")
+                # threestudio.info(f"Spawning {len(prompts_to_process)} processes to process prompts.")
+                # num_workers = 0  # hard-coded number of processes
+                # pool = Pool(num_workers)
+                # args_list = [
+                #     (
+                #         self.cfg.pretrained_model_name_or_path,
+                #         prompts_to_process[idx_worker::num_workers],
+                #         self._cache_dir,
+                #     ) for idx_worker in range(num_workers)
+                # ]
+
+                # for _ in pool.imap_unordered(self.spawn_func, args_list):
+                #     pass
+                # threestudio.info(f"Finished processing prompts.")
+
+                # try 3-rd approach
+                self.spawn_func(
+                    (
                         self.cfg.pretrained_model_name_or_path,
                         prompts_to_process,
                         self._cache_dir,
-                    ),
+                    )
                 )
 
-                subprocess.start()
-                subprocess.join()
-                threestudio.info(f"Finished processing prompts.")
-
             else:
+
+                # load tokenizer and text encoder in the main process
+                from transformers import AutoTokenizer, CLIPTextModel
+                os.environ["TOKENIZERS_PARALLELISM"] = "false"
+                tokenizer = AutoTokenizer.from_pretrained(
+                    self.cfg.pretrained_model_name_or_path, subfolder="tokenizer"
+                )
+                text_encoder = CLIPTextModel.from_pretrained(
+                    self.cfg.pretrained_model_name_or_path,
+                    subfolder="text_encoder",
+                    device_map="auto",
+                )
+
+                for p in text_encoder.parameters():
+                    p.requires_grad_(False)
+
                 # single process
                 from tqdm import tqdm
                 for prompt in tqdm(prompts_to_process, desc="Processing prompts"):
-                    self.spawn_func(
+                    self.func(
                         self.cfg.pretrained_model_name_or_path,
                         prompt,
                         self._cache_dir,
