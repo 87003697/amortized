@@ -430,16 +430,20 @@ class MultipromptDualRendererSemisupGeneratorSystem(BaseLift3DSystem):
                     os.listdir(os.path.join(self.get_save_dir(), filestem)),
                     desc="Generating validation videos",
                 ):
-                    self.save_img_sequence(
-                        os.path.join(filestem, prompt),
-                        os.path.join(filestem, prompt),
-                        "(\d+)\.png",
-                        save_format="mp4",
-                        fps=10,
-                        name="validation_epoch_end",
-                        step=self.true_global_step,
-                        # multithreaded=True,
-                    )
+                    try:
+                        self.save_img_sequence(
+                            os.path.join(filestem, prompt),
+                            os.path.join(filestem, prompt),
+                            "(\d+)\.png",
+                            save_format="mp4",
+                            fps=10,
+                            name="validation_epoch_end",
+                            step=self.true_global_step,
+                            # multithreaded=True,
+                        )
+                    except:
+                        threestudio.info('cannot save {} at step {}'.format(prompt, self.true_global_step))
+
 
     def on_test_epoch_end(self):
         filestems = [
@@ -452,13 +456,16 @@ class MultipromptDualRendererSemisupGeneratorSystem(BaseLift3DSystem):
                     os.listdir(os.path.join(self.get_save_dir(), filestem)),
                     desc="Generating validation videos",
                 ):
-                    self.save_img_sequence(
-                        os.path.join(filestem, prompt),
-                        os.path.join(filestem, prompt),
-                        "(\d+)\.png",
-                        save_format="mp4",
-                        fps=30,
-                        name="test",
-                        step=self.true_global_step,
-                        # multithreaded=True,
-                    )
+                    try:
+                        self.save_img_sequence(
+                            os.path.join(filestem, prompt),
+                            os.path.join(filestem, prompt),
+                            "(\d+)\.png",
+                            save_format="mp4",
+                            fps=30,
+                            name="test",
+                            step=self.true_global_step,
+                            # multithreaded=True,
+                        )
+                    except:
+                        threestudio.info('cannot save {} at step {}'.format(prompt, self.true_global_step))
