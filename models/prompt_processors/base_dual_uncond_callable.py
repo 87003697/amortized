@@ -308,10 +308,10 @@ class MultiPromptProcessor(BaseObject):
                         text_encoder,
                     )
 
-            # no need to keep tokenizer and text_encoder in memory
-            del tokenizer
-            del text_encoder
-            cleanup()
+                # no need to keep tokenizer and text_encoder in memory
+                del tokenizer
+                del text_encoder
+                cleanup()
 
     def load_text_embeddings(self, prompt_batch: List[str]) -> None:
 
