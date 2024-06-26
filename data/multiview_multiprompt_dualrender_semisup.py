@@ -139,6 +139,10 @@ class BaseDataset(Dataset, Updateable):
             get_ray_directions(H=height, W=width, focal=1.0)
             for (height, width) in zip(self.ray_heights, self.ray_widths)
         ] 
+        self._directions_unit_focals_rasterize = [
+            get_ray_directions(H=height, W=width, focal=1.0)
+            for (height, width) in zip(self.heights, self.widths)
+        ]
         ##############################################################################################################
         # the following config is intialized for the 1st iteration
         self.height: int = self.heights[0]
@@ -146,6 +150,7 @@ class BaseDataset(Dataset, Updateable):
         self.ray_height: int = self.ray_heights[0]
         self.ray_width: int = self.ray_widths[0]
         self.directions_unit_focal = self.directions_unit_focals[0]
+        self._directions_unit_focal_rasterize = self._directions_unit_focals_rasterize[0]
         # the following config is fixed for the whole training process
         self.elevation_range: Tuple[float, float] = self.cfg.unsup_elevation_range
         self.azimuth_range: Tuple[float, float] = self.cfg.unsup_azimuth_range
@@ -176,6 +181,7 @@ class BaseDataset(Dataset, Updateable):
         self.ray_height = self.ray_heights[size_index]
         self.ray_width = self.ray_widths[size_index]
         self.directions_unit_focal = self.directions_unit_focals[size_index]
+        self._directions_unit_focal_rasterize = self._directions_unit_focals_rasterize[size_index]
         threestudio.debug(
             f"Updated height={self.height}, width={self.width}, ray_height={self.ray_height}, ray_width={self.ray_width}"
         )
@@ -281,8 +287,17 @@ class BaseDataset(Dataset, Updateable):
             directions[:, :, :, :2] / focal_length[:, None, None, None]
         )
 
+        directions_rasterize: Float[Tensor, "B H W 3"] = self._directions_unit_focal_rasterize[
+            None, :, :, :
+        ].repeat(batch_size, 1, 1, 1)
+        directions_rasterize[:, :, :, :2] = (
+            directions_rasterize[:, :, :, :2] / focal_length[:, None, None, None]
+        )
+
+
         # Importance note: the returned rays_d MUST be normalized!
         rays_o, rays_d = get_rays(directions, c2w, keepdim=True)
+        _, rays_d_rasterize = get_rays(directions_rasterize, c2w, keepdim=True)
 
         proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(
             fovy, self.width / self.height, 0.1, 1000.0
@@ -302,6 +317,7 @@ class BaseDataset(Dataset, Updateable):
             "height": self.height,
             "width": self.width,
             "fovy": fovy_deg,
+            "rays_d_rasterize":  rays_d_rasterize
         }
 
 
@@ -603,13 +619,13 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
             # the number of supervised data in each 100 samples
             # choose a deterministic way to insert the supervised data
             sup_interval = int(100 * sup_ratio)
-            sup_indices = np.arange(0, 100, sup_interval)
+            sup_indices = np.arange(0, 100, sup_interval) if sup_interval > 0 else []
             for i in sup_indices:
                 data_schedule[i] = "sup"
             # the data schedule is fixed with [sup, unsup, sup, unsup, ...]
             self.data_schedule = data_schedule
 
-        self.sup_or_unsup = "sup" # the initial value, will be updated in update_step
+        self.sup_or_unsup = "unsup" # the initial value, will be updated in update_step
 
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
         ##############################################################################################################
@@ -848,13 +864,20 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule(pl.LightningDataM
         
         ##############################################################################################################
         # load the meta json of the supervised data
-        path = os.path.join(
-            self.cfg.obj_library_dir, 
-            self.cfg.obj_library,
-            self.cfg.meta_json
-        )
-        with open(path, "r") as f:
-            self.sup_obj_library = json.load(f)
+        if self.cfg.obj_library.lower() == 'none':
+            self.sup_obj_library = {
+                "train": {},
+                "val": {},
+                "test": {}
+            }
+        else:
+            path = os.path.join(
+                self.cfg.obj_library_dir, 
+                self.cfg.obj_library,
+                self.cfg.meta_json
+            )
+            with open(path, "r") as f:
+                self.sup_obj_library = json.load(f)
 
         ##############################################################################################################
         self.num_workers = 2 #0 # for debugging

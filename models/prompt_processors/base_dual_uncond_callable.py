@@ -80,6 +80,7 @@ class MultiPromptProcessor(BaseObject):
         perp_neg_f_sf: Tuple[float, float, float] = (4, 0.5, -2.426)
 
         use_local_text_embeddings: bool = False
+        use_view_dependent_text_embeddings: Optional[List[str]] = None #field(default_factory=lambda: [])
 
         # whether to split the text embeddings across GPUs
         gpu_split: bool = True
@@ -355,6 +356,7 @@ class MultiPromptProcessor(BaseObject):
         obj = MultiPromptProcessorOutput(
             device=self.device,
             use_local_text_embeddings=self.cfg.use_local_text_embeddings,
+            use_view_dependent_text_embeddings=self.cfg.use_view_dependent_text_embeddings,
             **prompt_args,
             **direction_args,
         )
@@ -377,17 +379,51 @@ class MultiPromptProcessorOutput:
     perp_neg_f_sf: Tuple[float, float, float]
     device: str = "cuda"
     use_local_text_embeddings: bool = False
+    use_view_dependent_text_embeddings: Optional[List[str]] = None
     uncond_text_embeddings_2nd: Optional[Float[Tensor, "B ..."]] = None
     uncond_text_embeddings_vd_2nd: Optional[Float[Tensor, "B ..."]] = None
 
 
     def get_global_text_embeddings(
         self,
+        use_local_text_embeddings: Optional[bool] = None,
     ):
-        if self.use_local_text_embeddings:
-            return torch.stack(self.local_text_embeddings, dim=0).to(self.device)
+
+        if use_local_text_embeddings is None:
+            use_local_text_embeddings = self.use_local_text_embeddings
+
+        if use_local_text_embeddings:
+            if not self.use_view_dependent_text_embeddings:
+                return torch.stack(self.local_text_embeddings, dim=0).to(self.device)
+            else:
+                feature_list_batch = []
+                for prompt_vd, prompt in zip(self.text_embeddings_vd, self.local_text_embeddings):
+                    feature_list = []
+                    for view in self.use_view_dependent_text_embeddings:
+                        assert view in ["front", "side", "back", "overhead", "none"], f"Invalid view-dependent text embeddings: {view}"
+                        if view == "none": # special case for not using view-dependent text embeddings
+                            feature_list.append(
+                                prompt
+                            )
+                        else:
+                            direction_idx = self.direction2idx[view]
+                            feature_list.append(
+                                prompt_vd[direction_idx]
+                            )
+                    feature_list_batch.append(
+                        torch.stack(
+                            feature_list, 
+                            dim=0
+                        )
+                    )
+                return torch.stack(feature_list_batch, dim=0).to(self.device)
         else:
             return torch.stack(self.global_text_embeddings, dim=0).to(self.device)
+        
+            # if not self.use_view_dependent_text_embeddings:
+            #     return torch.stack(self.global_text_embeddings, dim=0).to(self.device)
+            # else:
+            #     raise NotImplementedError("View-dependent text embeddings are not supported yet.")
 
     def get_text_embeddings(
         self, 

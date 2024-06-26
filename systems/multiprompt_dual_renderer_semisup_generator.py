@@ -85,13 +85,11 @@ class MultipromptDualRendererSemisupGeneratorSystem(BaseLift3DSystem):
         
         prompt_utils = batch["prompt_utils"]
         if "prompt_target" in batch:
-            # for the case of interpolation
-            prompt_utils_target = batch["prompt_utils_target"]
-            ratio = batch["ratio"]
-            batch["text_embed"] = ratio * prompt_utils.get_global_text_embeddings() + (1 - ratio) * prompt_utils_target.get_global_text_embeddings()
+           raise NotImplementedError
         else:
             # more general case
             batch["text_embed"] = prompt_utils.get_global_text_embeddings()
+            batch["text_embed_bg"] = prompt_utils.get_global_text_embeddings(use_local_text_embeddings = False)
     
         # forward pass
         batch['space_cache'] = self.geometry.generate_space_cache(
