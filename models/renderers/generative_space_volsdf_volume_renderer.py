@@ -481,3 +481,4 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
         if hasattr(self.geometry, "eval"):
             self.geometry.eval()
         return super().eval()
+    
