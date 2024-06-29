@@ -941,7 +941,11 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule(pl.LightningDataM
         if stage in (None, "fit"):
             # prepare the dataset
             prompt_lists = self.unsup_prompt_library["train"] \
-                + [obj['caption'] for obj in self.sup_obj_library["train"].values()]
+                + self.unsup_prompt_library["val"] \
+                + self.unsup_prompt_library["test"] \
+                + [obj['caption'] for obj in self.sup_obj_library["train"].values()] \
+                + [obj['caption'] for obj in self.sup_obj_library["val"].values()] \
+                + [obj['caption'] for obj in self.sup_obj_library["test"].values()]
             self.prompt_processor.prepare_text_embeddings(
                 prompt_lists
             )
