@@ -420,6 +420,7 @@ class MultipromptDualRendererSemisupGeneratorSystem(BaseLift3DSystem):
             self._save_image_grid(batch, batch_idx, out_2nd, phase="test", render="2nd")
 
     def on_validation_epoch_end(self):
+        barrier() # wait until all GPUs finish rendering images
         filestems = [
             f"it{self.true_global_step}-val-{render}"
             for render in ["1st", "2nd"]
@@ -454,6 +455,7 @@ class MultipromptDualRendererSemisupGeneratorSystem(BaseLift3DSystem):
                         )
 
     def on_test_epoch_end(self):
+        barrier() # wait until all GPUs finish rendering images
         filestems = [
             f"it{self.true_global_step}-test-{render}"
             for render in ["1st", "2nd"]
