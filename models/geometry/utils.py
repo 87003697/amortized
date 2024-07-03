@@ -173,7 +173,7 @@ def sample_from_quaplanes(plane_features, coordinates, mode='bilinear', padding_
 
 def sample_from_Hplanes(plane_features, coordinates, mode='bilinear', padding_mode='zeros', box_warp=2, interpolate_feat: Optional[str] = 'None'):
     assert padding_mode == 'zeros'
-    assert interpolate_feat in [None, "v1", "v2", "v3", "v4"]
+    assert interpolate_feat in [None, "v1", "v2", "v3", "v4", "v5"]
 
     N, n_planes, C, H, W = plane_features.shape
     _, M, _ = coordinates.shape
@@ -293,7 +293,16 @@ def sample_from_Hplanes(plane_features, coordinates, mode='bilinear', padding_mo
         output_features = (output_features * alpha).sum(dim=1, keepdim=True).reshape(N, M, C)
 
         return output_features.contiguous()
+    
+    elif interpolate_feat in ["v5"]:
 
+        alpha_front = 0.5 + 0.5 * coordinates[..., 0:1]
+        alpha_back  = 0.5 - 0.5 * coordinates[..., 0:1]
+        alpha_side = torch.ones_like(coordinates[..., 1:2])
+        alpha = torch.cat([alpha_side, alpha_front, alpha_back], dim=-1).permute(0, 2, 1).unsqueeze(-1)
+        output_features = (output_features * alpha).sum(dim=1, keepdim=True).reshape(N, M, C)
+
+        return output_features.contiguous()
 
 def get_trilinear_feature(
         points: Float[Tensor, "*N Di"],
