@@ -80,7 +80,9 @@ class StableDiffusionHplaneAttention(BaseImplicitGeometry):
         if self.cfg.interpolate_feat in ["v2", "v3"]:
             input_dim = self.space_generator.output_dim * 3 
         elif self.cfg.interpolate_feat in ["v4", "v5"]:
-            input_dim = self.space_generator.output_dim * 1
+            input_dim = self.space_generator.output_dim * 1 
+        elif self.cfg.interpolate_feat in ["v6"]:
+            input_dim = self.space_generator.output_dim * 1 - 1
         else:
             input_dim = self.space_generator.output_dim * 2
 
