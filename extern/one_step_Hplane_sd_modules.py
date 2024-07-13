@@ -825,6 +825,7 @@ class OneStepHplaneStableDiffusion(BaseModule):
         self_lora_type: str = "triple_v1"
         cross_lora_type: str = "triple_v1"
         locon_type: str = "triple_v1"
+        prompt_bias: bool = False
 
     cfg: Config
 
@@ -950,6 +951,9 @@ class OneStepHplaneStableDiffusion(BaseModule):
             self.unet.enable_gradient_checkpointing()
             self.vae.enable_gradient_checkpointing()
 
+        if self.cfg.prompt_bias:
+            self.prompt_bias = nn.Parameter(torch.zeros(3, 77, 1024))
+
     @property
     def unet(self):
         return self.submodules.unet
@@ -1049,6 +1053,9 @@ class OneStepHplaneStableDiffusion(BaseModule):
             text_embed = text_embed.view(batch_size * self.num_planes, *text_embed.shape[-2:])
         else:
             raise ValueError("The text_embed should be either 3D or 4D.")
+        
+        if hasattr(self, "prompt_bias"):
+            text_embed = text_embed + self.prompt_bias.repeat(batch_size, 1, 1)
 
         # reshape the styles
         styles = styles.view(-1, 4, noise_shape, noise_shape)
