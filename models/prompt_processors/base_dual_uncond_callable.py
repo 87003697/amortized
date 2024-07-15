@@ -430,10 +430,14 @@ class MultiPromptProcessorOutput:
                 for prompt_vd, prompt in zip(self.text_embeddings_vd, self.local_text_embeddings):
                     feature_list = []
                     for view in self.use_view_dependent_text_embeddings:
-                        assert view in ["front", "side", "back", "overhead", "none"], f"Invalid view-dependent text embeddings: {view}"
+                        assert view in ["front", "side", "back", "overhead", "none", "uncond_1st"], f"Invalid view-dependent text embeddings: {view}"
                         if view == "none": # special case for not using view-dependent text embeddings
                             feature_list.append(
                                 prompt
+                            )
+                        elif view == "uncond_1st":
+                            feature_list.append(
+                                self.uncond_text_embeddings
                             )
                         else:
                             direction_idx = self.direction2idx[view]
