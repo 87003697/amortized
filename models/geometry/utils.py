@@ -108,7 +108,7 @@ def project_onto_planes(planes, coordinates):
     projections = torch.bmm(coordinates, inv_planes)
     return projections[..., :2]
 
-def sample_from_planes(plane_features, coordinates, mode='bilinear', padding_mode='zeros', box_warp=2):
+def sample_from_planes(plane_features, coordinates, mode='bilinear', padding_mode='zeros', box_warp=2, interpolate_feat: Optional[str] = 'None'):
     assert padding_mode == 'zeros'
     N, n_planes, C, H, W = plane_features.shape
     _, M, _ = coordinates.shape
@@ -119,10 +119,20 @@ def sample_from_planes(plane_features, coordinates, mode='bilinear', padding_mod
     projected_coordinates = project_onto_planes(planes.to(coordinates), coordinates).unsqueeze(1)
     output_features = torch.nn.functional.grid_sample(plane_features, projected_coordinates.float(), mode=mode, padding_mode=padding_mode, align_corners=False)
     output_features = output_features.permute(0, 3, 2, 1).reshape(N, n_planes, M, C)
-    
-    # the following is from https://github.com/3DTopia/OpenLRM/blob/d4caebbea3f446904d9faafaf734e797fcc4ec89/lrm/models/rendering/synthesizer.py#L42
-    output_features = output_features.permute(0, 2, 1, 3).reshape(N, M, n_planes*C)
+
+    if interpolate_feat in [None, "v1"]:
+        output_features = output_features.sum(dim=1, keepdim=True).reshape(N, M, C)
+
+    elif interpolate_feat in ["v2"]:
+        output_features = output_features.permute(0, 2, 1, 3).reshape(N, M, n_planes*C)        
+
+    elif interpolate_feat in ["v3"]:
+        alpha = torch.sigmoid(output_features[..., -1:])
+        output_features = (output_features[..., :-1] * alpha).sum(dim=1, keepdim=True).reshape(N, M, C - 1)
+
     return output_features.contiguous()
+
+    
 
 def sample_from_quaplanes(plane_features, coordinates, mode='bilinear', padding_mode='zeros', box_warp=2, interpolate_feat: Optional[str] = 'None'):
     assert padding_mode == 'zeros'

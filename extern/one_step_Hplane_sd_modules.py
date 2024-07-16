@@ -832,7 +832,6 @@ class OneStepHplaneStableDiffusion(BaseModule):
     def configure(self) -> None:
 
         self.output_dim = self.cfg.output_dim
-        self.num_planes = 3
 
         @dataclass
         class SubModules:
@@ -1074,12 +1073,12 @@ class OneStepHplaneStableDiffusion(BaseModule):
             * (styles - sigmas.view(-1, 1, 1, 1) * noise_pred)
         )
 
-        # decode the latents to quaplane
+        # decode the latents to hplane
         latents = 1 / self.vae.config.scaling_factor * latents
-        quaplane = self.vae.decode(latents).sample
+        hplane = self.vae.decode(latents).sample
         
-        # quaplane = (quaplane * 0.5 + 0.5).clamp(0, 1) # no need for  
-        quaplane = quaplane.view(batch_size, self.num_planes, -1, *quaplane.shape[-2:])
+        # hplane = (hplane * 0.5 + 0.5).clamp(0, 1) # no need for  
+        hplane = hplane.view(batch_size, self.num_planes, -1, *hplane.shape[-2:])
 
-        return quaplane
+        return hplane
         

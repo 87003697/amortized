@@ -219,20 +219,18 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
         hidden_size: int,
         rank: int = 4,
         network_alpha: Optional[float] = None,
-        num_planes: int = 3,
         with_bias: bool = False,
         lora_type: str = "triple_v1", # vanilla, 
     ):
         super().__init__()
 
-        assert num_planes == 3, "The number of planes should be 3."
         assert lora_type in ["triple_v1", "vanilla"]
 
         self.hidden_size = hidden_size
         self.rank = rank
         self.lora_type = lora_type
 
-        if lora_type == "triple_v1":
+        if lora_type in ["triple_v1"]:
             # lora for 1st plane
             self.to_q_xy_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_k_xy_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
@@ -251,7 +249,7 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             self.to_v_yz_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_out_yz_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
 
-        elif lora_type == "vanilla":
+        elif lora_type in ["vanilla"]:
             self.to_q_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_k_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_v_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
@@ -284,20 +282,21 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
 
         ############################################################################################################
         # query
-        if "triple" in self.lora_type:
+        if self.lora_type in ["triple_v1",]:
             query = attn.to_q(hidden_states)
             _query_new = torch.zeros_like(query)
-            # lora for 1st plane
-            _query_new[0::3] = query[0::3] + scale * self.to_q_xy_lora(hidden_states[0::3])
-            # lora for 2nd plane
-            _query_new[1::3] = query[1::3] + scale * self.to_q_xz_lora(hidden_states[1::3])
-            # lora for 3rd plane
-            _query_new[2::3] = query[2::3] + scale * self.to_q_yz_lora(hidden_states[2::3])
-            query = _query_new
-        elif self.lora_type == "vanilla":
+            # lora for xy plane
+            _query_new[0::3] = self.to_q_xy_lora(hidden_states[0::3])
+            # lora for xz plane
+            _query_new[1::3] = self.to_q_xz_lora(hidden_states[1::3])
+            # lora for yz plane
+            _query_new[2::3] =self.to_q_yz_lora(hidden_states[2::3])
+            query = query + scale * _query_new
+        elif self.lora_type in ["vanilla"]:
             query = attn.to_q(hidden_states) + scale * self.to_q_lora(hidden_states)
+        else:
+            raise NotImplementedError("The LoRA type is not supported for the query in HplaneSelfAttentionLoRAAttnProcessor.")
 
-        query = attn.head_to_batch_dim(query)
         ############################################################################################################
 
         if encoder_hidden_states is None:
@@ -307,69 +306,72 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
 
         ############################################################################################################
         # key and value
-        if "triple" in self.lora_type:
+        if self.lora_type in ["triple_v1",]:
             key = attn.to_k(encoder_hidden_states)
             _key_new = torch.zeros_like(key)
             # lora for 1st plane
-            _key_new[0::3] = key[0::3] + scale * self.to_k_xy_lora(encoder_hidden_states[0::3])
+            _key_new[0::3] = self.to_k_xy_lora(encoder_hidden_states[0::3])
             # lora for 2nd plane
-            _key_new[1::3] = key[1::3] + scale * self.to_k_xz_lora(encoder_hidden_states[1::3])
+            _key_new[1::3] = self.to_k_xz_lora(encoder_hidden_states[1::3])
             # lora for 3rd plane
-            _key_new[2::3] = key[2::3] + scale * self.to_k_yz_lora(encoder_hidden_states[2::3])
-            key = _key_new
+            _key_new[2::3] = self.to_k_yz_lora(encoder_hidden_states[2::3])
+            key = key + scale * _key_new
 
             value = attn.to_v(encoder_hidden_states)
             _value_new = torch.zeros_like(value)
             # lora for 1st plane
-            _value_new[0::3] = value[0::3] + scale * self.to_v_xy_lora(encoder_hidden_states[0::3])
+            _value_new[0::3] = self.to_v_xy_lora(encoder_hidden_states[0::3])
             # lora for 2nd plane
-            _value_new[1::3] = value[1::3] + scale * self.to_v_xz_lora(encoder_hidden_states[1::3])
+            _value_new[1::3] = self.to_v_xz_lora(encoder_hidden_states[1::3])
             # lora for 3rd plane
-            _value_new[2::3] = value[2::3] + scale * self.to_v_yz_lora(encoder_hidden_states[2::3])
-            value = _value_new
-        elif self.lora_type == "vanilla":
+            _value_new[2::3] = scale * self.to_v_yz_lora(encoder_hidden_states[2::3])
+            value = value + scale * _value_new
+        elif self.lora_type in ["vanilla", ]:
             key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(encoder_hidden_states)
             value = attn.to_v(encoder_hidden_states) + scale * self.to_v_lora(encoder_hidden_states)
+        else:
+            raise NotImplementedError("The LoRA type is not supported for the key and value in HplaneSelfAttentionLoRAAttnProcessor.")
+
+        ############################################################################################################
+        # attention scores
 
         # in self-attention, query of each plane should be used to calculate the attention scores of all planes
-        key = attn.head_to_batch_dim(
-            torch.cat(
-                [
-                    torch.cat([key[0::3], key[1::3], key[2::3]], dim=1), # sequence_length x 3 * hidden_size
-                    torch.cat([key[1::3], key[2::3], key[0::3]], dim=1),
-                    torch.cat([key[2::3], key[0::3], key[1::3]], dim=1)
-                ], dim=0
+        if self.lora_type in ["triple_v1", "vanilla"]:
+            query = attn.head_to_batch_dim(
+                query.view(batch_size // 3, sequence_length * 3, self.hidden_size)
+            ) 
+            key = attn.head_to_batch_dim(
+                key.view(batch_size // 3, sequence_length * 3, self.hidden_size)
             )
-        )
-        value = attn.head_to_batch_dim(
-            torch.cat(
-                [
-                    torch.cat([value[0::3], value[1::3], value[2::3]], dim=1), # sequence_length x 3 * hidden_size
-                    torch.cat([value[1::3], value[2::3], value[0::3]], dim=1),
-                    torch.cat([value[2::3], value[0::3], value[1::3]], dim=1)
-                ], dim=0
+            value = attn.head_to_batch_dim(
+                value.view(batch_size // 3, sequence_length * 3, self.hidden_size)
             )
-        )
-        ############################################################################################################
+            # calculate the attention scores
+            attention_probs = attn.get_attention_scores(query, key, attention_mask)
+            hidden_states = torch.bmm(attention_probs, value)
+            hidden_states = attn.batch_to_head_dim(hidden_states)
+            # split the hidden states into 3 planes
+            hidden_states = hidden_states.view(batch_size // 3 * 3, sequence_length, self.hidden_size)
 
-        attention_probs = attn.get_attention_scores(query, key, attention_mask)
-        hidden_states = torch.bmm(attention_probs, value)
-        hidden_states = attn.batch_to_head_dim(hidden_states)
+        else:
+            raise NotImplementedError("The LoRA type is not supported for attention scores calculation in HplaneSelfAttentionLoRAAttnProcessor.")
 
         ############################################################################################################
         # linear proj
-        if "triple" in self.lora_type:
+        if self.lora_type in ["triple_v1", ]:
             hidden_states = attn.to_out[0](hidden_states)
             _hidden_states_new = torch.zeros_like(hidden_states)
             # lora for 1st plane
-            _hidden_states_new[0::3] = hidden_states[0::3] + scale * self.to_out_xy_lora(hidden_states[0::3])
+            _hidden_states_new[0::3] = self.to_out_xy_lora(hidden_states[0::3])
             # lora for 2nd plane
-            _hidden_states_new[1::3] = hidden_states[1::3] + scale * self.to_out_xz_lora(hidden_states[1::3])
+            _hidden_states_new[1::3] = self.to_out_xz_lora(hidden_states[1::3])
             # lora for 3rd plane
-            _hidden_states_new[2::3] = hidden_states[2::3] + scale * self.to_out_yz_lora(hidden_states[2::3])
-            hidden_states = _hidden_states_new
-        elif self.lora_type == "vanilla":
+            _hidden_states_new[2::3] = self.to_out_yz_lora(hidden_states[2::3])
+            hidden_states = hidden_states + scale * _hidden_states_new
+        elif self.lora_type in ["vanilla",]:
             hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(hidden_states)
+        else:
+            raise NotImplementedError("The LoRA type is not supported for the to_out layer in HplaneSelfAttentionLoRAAttnProcessor.")
 
         # dropout
         hidden_states = attn.to_out[1](hidden_states)
@@ -396,20 +398,18 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
         cross_attention_dim: int,
         rank: int = 4,
         network_alpha: Optional[float] = None,
-        num_planes: int = 3,
         with_bias: bool = False,
         lora_type: str = "triple_v1", # vanilla,
     ):
         super().__init__()
 
-        assert num_planes == 3, "The number of planes should be 3."
         assert lora_type in ["triple_v1", "vanilla"], "The LoRA type is not supported."
 
         self.hidden_size = hidden_size
         self.rank = rank
         self.lora_type = lora_type
 
-        if lora_type == "triple_v1":
+        if lora_type in ["triple_v1"]:
             # lora for 1st plane
             self.to_q_xy_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_k_xy_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
@@ -428,7 +428,7 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             self.to_v_yz_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_out_yz_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
 
-        elif lora_type == "vanilla":
+        elif lora_type in ["vanilla"]:
             # lora for all planes
             self.to_q_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_k_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
@@ -462,16 +462,16 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
 
         ############################################################################################################
         # query
-        if "triple" in self.lora_type:
+        if self.lora_type in ["triple_v1",]:
             query = attn.to_q(hidden_states)
             _query_new = torch.zeros_like(query)        
-            # lora for 1st plane
-            _query_new[0::3] = query[0::3] + scale * self.to_q_xy_lora(hidden_states[0::3])
-            # lora for 2nd plane
-            _query_new[1::3] = query[1::3] + scale * self.to_q_xz_lora(hidden_states[1::3])
-            # lora for 3rd plane
-            _query_new[2::3] = query[2::3] + scale * self.to_q_yz_lora(hidden_states[2::3])
-            query = _query_new
+            # lora for xy plane
+            _query_new[0::3] = self.to_q_xy_lora(hidden_states[0::3])
+            # lora for xz plane
+            _query_new[1::3] = self.to_q_xz_lora(hidden_states[1::3])
+            # lora for yz plane
+            _query_new[2::3] = self.to_q_yz_lora(hidden_states[2::3])
+            query = query + scale * _query_new
 
         elif self.lora_type == "vanilla":
             query = attn.to_q(hidden_states) + scale * self.to_q_lora(hidden_states)
@@ -486,28 +486,28 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
 
         ############################################################################################################
         # key and value
-        if "triple" in self.lora_type:
+        if self.lora_type in ["triple_v1",]:
             key = attn.to_k(encoder_hidden_states)
             _key_new = torch.zeros_like(key)
-            # lora for 1st plane
-            _key_new[0::3] = key[0::3] + scale * self.to_k_xy_lora(encoder_hidden_states[0::3])
-            # lora for 2nd plane
-            _key_new[1::3] = key[1::3] + scale * self.to_k_xz_lora(encoder_hidden_states[1::3])
-            # lora for 3rd plane
-            _key_new[2::3] = key[2::3] + scale * self.to_k_yz_lora(encoder_hidden_states[2::3])
-            key = _key_new
+            # lora for xy plane
+            _key_new[0::3] = self.to_k_xy_lora(encoder_hidden_states[0::3])
+            # lora for xz plane
+            _key_new[1::3] = self.to_k_xz_lora(encoder_hidden_states[1::3])
+            # lora for yz plane
+            _key_new[2::3] = self.to_k_yz_lora(encoder_hidden_states[2::3])
+            key = key + scale * _key_new
 
             value = attn.to_v(encoder_hidden_states)
             _value_new = torch.zeros_like(value)
-            # lora for 1st plane
-            _value_new[0::3] = value[0::3] + scale * self.to_v_xy_lora(encoder_hidden_states[0::3])
-            # lora for 2nd plane
-            _value_new[1::3] = value[1::3] + scale * self.to_v_xz_lora(encoder_hidden_states[1::3])
-            # lora for 3rd plane
-            _value_new[2::3] = value[2::3] + scale * self.to_v_yz_lora(encoder_hidden_states[2::3])
-            value = _value_new
+            # lora for xy plane
+            _value_new[0::3] = self.to_v_xy_lora(encoder_hidden_states[0::3])
+            # lora for xz plane
+            _value_new[1::3] = self.to_v_xz_lora(encoder_hidden_states[1::3])
+            # lora for yz plane
+            _value_new[2::3] = self.to_v_yz_lora(encoder_hidden_states[2::3])
+            value = value + scale * _value_new
 
-        elif self.lora_type == "vanilla":
+        elif self.lora_type in ["vanilla",]:
             key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(encoder_hidden_states)
             value = attn.to_v(encoder_hidden_states) + scale * self.to_v_lora(encoder_hidden_states)
 
@@ -521,18 +521,20 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
 
         ############################################################################################################
         # linear proj
-        if "triple" in self.lora_type:
+        if self.lora_type in ["triple_v1", ]:
             hidden_states = attn.to_out[0](hidden_states)
             _hidden_states_new = torch.zeros_like(hidden_states)
-            # lora for 1st plane
-            _hidden_states_new[0::3] = hidden_states[0::3] + scale * self.to_out_xy_lora(hidden_states[0::3])
-            # lora for 2nd plane
-            _hidden_states_new[1::3] = hidden_states[1::3] + scale * self.to_out_xz_lora(hidden_states[1::3])
-            # lora for 3rd plane
-            _hidden_states_new[2::3] = hidden_states[2::3] + scale * self.to_out_yz_lora(hidden_states[2::3])
-            hidden_states = _hidden_states_new
-        elif self.lora_type == "vanilla":
+            # lora for xy plane
+            _hidden_states_new[0::3] = self.to_out_xy_lora(hidden_states[0::3])
+            # lora for xz plane
+            _hidden_states_new[1::3] = self.to_out_xz_lora(hidden_states[1::3])
+            # lora for yz plane
+            _hidden_states_new[2::3] = self.to_out_yz_lora(hidden_states[2::3])
+            hidden_states = hidden_states + scale * _hidden_states_new
+        elif self.lora_type in ["vanilla",]:
             hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(hidden_states)
+        else:
+            raise NotImplementedError("The LoRA type is not supported for the to_out layer in HplaneCrossAttentionLoRAAttnProcessor.")
 
         # dropout
         hidden_states = attn.to_out[1](hidden_states)
@@ -558,18 +560,19 @@ class OneStepTriplaneStableDiffusion(BaseModule):
         pretrained_model_name_or_path: str = "runwayml/stable-diffusion-v1-5"
         training_type: str = "lora_rank_4",
         timestep: int = 999,
-        num_planes: int = 3,
         output_dim: int = 32,
         gradient_checkpoint: bool = False
-        lora_type: str = "triple_v1"
+        self_lora_type: str = "triple_v1"
+        cross_lora_type: str = "triple_v1"
         locon_type: str = "triple_v1"
+        prompt_bias: bool = False
 
     cfg: Config
 
     def configure(self) -> None:
 
-        self.num_planes = self.cfg.num_planes
         self.output_dim = self.cfg.output_dim
+        self.num_planes = 3
 
         @dataclass
         class SubModules:
@@ -601,7 +604,6 @@ class OneStepTriplaneStableDiffusion(BaseModule):
 
         # transform the attn_processor to customized one
         self.timestep = self.cfg.timestep
-        self.num_planes = self.cfg.num_planes
 
         # set the training type
         training_type = self.cfg.training_type
@@ -616,8 +618,13 @@ class OneStepTriplaneStableDiffusion(BaseModule):
  
         if "lora" in training_type:
             # parse the rank from the training type, with the template "lora_rank_{}"
-            rank = re.search(r"lora_rank_(\d+)", training_type).group(1)
-            self.lora_rank = int(rank)
+            assert "self_lora_rank" in training_type, "The self_lora_rank is not specified."
+            rank = re.search(r"self_lora_rank_(\d+)", training_type).group(1)
+            self.self_lora_rank = int(rank)
+
+            assert "cross_lora_rank" in training_type, "The cross_lora_rank is not specified."
+            rank = re.search(r"cross_lora_rank_(\d+)", training_type).group(1)
+            self.cross_lora_rank = int(rank)
 
             # if the finetuning is with bias
             self.w_lora_bias = False
@@ -684,6 +691,9 @@ class OneStepTriplaneStableDiffusion(BaseModule):
             self.unet.enable_gradient_checkpointing()
             self.vae.enable_gradient_checkpointing()
 
+        if self.cfg.prompt_bias:
+            self.prompt_bias = nn.Parameter(torch.zeros(3, 77, 1024))
+
     @property
     def unet(self):
         return self.submodules.unet
@@ -748,15 +758,15 @@ class OneStepTriplaneStableDiffusion(BaseModule):
                 # it is self-attention
                 cross_attention_dim = None
                 lora_attn_procs[name] = self_attn_procs(
-                    hidden_size, self.lora_rank, num_planes = self.num_planes, with_bias = self.w_lora_bias,
-                    lora_type = self.cfg.lora_type
+                    hidden_size, self.self_lora_rank, with_bias = self.w_lora_bias,
+                    lora_type = self.cfg.self_lora_type
                 )
             else:
                 # it is cross-attention
                 cross_attention_dim = module.config.cross_attention_dim
                 lora_attn_procs[name] = cross_attn_procs(
-                    hidden_size, cross_attention_dim, self.lora_rank, num_planes = self.num_planes, with_bias = self.w_lora_bias,
-                    lora_type = self.cfg.lora_type
+                    hidden_size, cross_attention_dim, self.cross_lora_rank, with_bias = self.w_lora_bias,
+                    lora_type = self.cfg.cross_lora_type
                 )
         return lora_attn_procs
 
@@ -783,6 +793,9 @@ class OneStepTriplaneStableDiffusion(BaseModule):
             text_embed = text_embed.view(batch_size * self.num_planes, *text_embed.shape[-2:])
         else:
             raise ValueError("The text_embed should be either 3D or 4D.")
+        
+        if hasattr(self, "prompt_bias"):
+            text_embed = text_embed + self.prompt_bias.repeat(batch_size, 1, 1)
 
         # reshape the styles
         styles = styles.view(-1, 4, noise_shape, noise_shape)

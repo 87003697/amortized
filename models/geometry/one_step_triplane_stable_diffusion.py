@@ -28,6 +28,9 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
                 "training_type": "lora",
                 "output_dim": 32,
                 "gradient_checkpoint": False,
+                "self_lora_type": "quadra_v1",
+                "cross_lora_type": "quadra_v1",
+                "locon_type": "quadra_v1",
             }
         )
 
@@ -60,6 +63,7 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
         # xz plane should looks that a img from right-left / left-right view
         # yz plane should looks that a img from front-back / back-front view
         rotate_planes: Optional[str] = None # "v1"
+        interpolate_feat: Optional[str] = None # "v1", "v2"
 
 
     def configure(self) -> None:
@@ -73,7 +77,15 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
             raise ValueError(f"Unknown backbone {self.cfg.backbone}")
 
         # set up the mlp
-        input_dim = self.space_generator.output_dim * 3
+        if self.cfg.interpolate_feat in ["v1"]:
+            input_dim = self.space_generator.output_dim * 1 # feat_xy + feat_xz + feat_yz
+        elif self.cfg.interpolate_feat in ["v2"]:
+            input_dim = self.space_generator.output_dim * 3 # feat_xy concat feat_xz concat feat_yz
+        elif self.cfg.interpolate_feat in ["v3"]:
+            input_dim = self.space_generator.output_dim * 1 - 1 # alpha_xy * feat_xy + alpha_xz * feat_xz + alpha_yz * feat_yz 
+        else:
+            raise ValueError(f"Unknown interpolate_feat {self.cfg.interpolate_feat}")
+        
         self.sdf_network = get_mlp(
             input_dim,
             1,
@@ -148,26 +160,48 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
         batch_size, n_points, n_dims = points.shape
         # the following code is similar to EG3D / OpenLRM
         
-        assert self.cfg.rotate_planes in [None, "v1"]
+        assert self.cfg.rotate_planes in [None, "v1", "v2"]
         if self.cfg.rotate_planes == None:
             return sample_from_planes(
                 plane_features = space_cache,
                 coordinates = points,
             ).view(*points.shape[:-1],-1)
-        
-        if self.cfg.rotate_planes == "v1":
-            space_cache_rotated = torch.zeros_like(space_cache)
-            # xy plane, diagonal-wise
-            space_cache_rotated[:, 0::3] = torch.transpose(space_cache[:, 0::3], 3, 4)
-            # xz plane, rotate 180° counterclockwise
-            space_cache_rotated[:, 1::3] = torch.rot90(space_cache[:, 1::3], k=2, dims=(3, 4))
-            # zy plane, rotate 90° clockwise
-            space_cache_rotated[:, 2::3] = torch.rot90(space_cache[:, 2::3], k=-1, dims=(3, 4))
-            return sample_from_planes(
-                plane_features = space_cache_rotated,
-                coordinates = points,
-            ).view(*points.shape[:-1],-1)
 
+        space_cache_rotated = torch.zeros_like(space_cache)
+        if self.cfg.rotate_planes == "v1":
+            # xy plane, diagonal-wise
+            space_cache_rotated[:, 0::3] = torch.transpose(
+                space_cache[:, 0::3], 3, 4
+            )
+            # xz plane, rotate 180° counterclockwise
+            space_cache_rotated[:, 1::3] = torch.rot90(
+                space_cache[:, 1::3], k=2, dims=(3, 4)
+            )
+            # zy plane, rotate 90° clockwise
+            space_cache_rotated[:, 2::3] = torch.rot90(
+                space_cache[:, 2::3], k=-1, dims=(3, 4)
+            )
+        elif self.cfg.rotate_planes == "v2":
+            # all are the same as v1, except for the xy plane
+            # xy plane, row-wise flip
+            space_cache_rotated[:, 0::3] = torch.flip(
+                space_cache[:, 0::3], dims=(4,)
+            )
+            # xz plane, rotate 180° counterclockwise
+            space_cache_rotated[:, 1::3] = torch.rot90(
+                space_cache[:, 1::3], k=2, dims=(3, 4)
+            )
+            # zy plane, rotate 90° clockwise
+            space_cache_rotated[:, 2::3] = torch.rot90(
+                space_cache[:, 2::3], k=-1, dims=(3, 4)
+            )
+
+        return sample_from_planes(
+            plane_features = space_cache_rotated,
+            coordinates = points,
+            interpolate_feat = self.cfg.interpolate_feat
+        ).view(*points.shape[:-1],-1)
+        
     def rescale_points(
         self,
         points: Float[Tensor, "*N Di"],
