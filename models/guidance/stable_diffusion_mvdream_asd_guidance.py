@@ -84,6 +84,9 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         dual_render_sync_t: bool = False
         dual_render_sync_view_sd: bool = True
 
+        # strategy to save memory
+        gradient_checkpoint: bool = False
+
     cfg: Config
 
     @torch.cuda.amp.autocast(enabled=False)
@@ -131,6 +134,9 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             )
 
             self.sd_use_perp_neg = self.cfg.sd_guidance_perp_neg != 0
+
+            if self.cfg.gradient_checkpoint:
+                self.sd_vae.enable_gradient_checkpointing()
         else:
             threestudio.info("Stable Diffusion is disabled.")
 
@@ -160,6 +166,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         self.grad_clip_val: Optional[float] = None
         self.num_train_timesteps = 1000
         self.set_min_max_steps()  # set to default value
+
 
     def get_t_plus(
         self, 
@@ -239,7 +246,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
     ) -> Float[Tensor, "B 4 32 32"]:
         imgs = imgs * 2.0 - 1.0
 
-        if False:
+        if self.cfg.gradient_checkpoint:
             h = self.mv_model.first_stage_model.encoder(imgs, gradient_checkpoint = True)
             moments = self.mv_model.first_stage_model.quant_conv(h)
             posterior = DiagonalGaussianDistribution(moments)
