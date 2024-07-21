@@ -24,6 +24,11 @@ from threestudio.utils.typing import *
 from extern.mvdream.model_zoo import build_model
 from extern.mvdream.camera_utils import normalize_camera
 
+from torch.utils.checkpoint import checkpoint_sequential, checkpoint
+from torch.nn.modules.container import ModuleList
+from extern.mvdream.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
+
+
 @threestudio.register("stable-diffusion-mvdream-asynchronous-score-distillation-guidance")
 class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
     @dataclass
@@ -233,9 +238,19 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         self, imgs: Float[Tensor, "B 3 256 256"]
     ) -> Float[Tensor, "B 4 32 32"]:
         imgs = imgs * 2.0 - 1.0
-        latents = self.mv_model.get_first_stage_encoding(
-            self.mv_model.encode_first_stage(imgs)
-        )
+
+        if False:
+            h = self.mv_model.first_stage_model.encoder(imgs, gradient_checkpoint = True)
+            moments = self.mv_model.first_stage_model.quant_conv(h)
+            posterior = DiagonalGaussianDistribution(moments)
+        
+            latents = self.mv_model.get_first_stage_encoding(
+                posterior
+            )
+        else:
+            latents = self.mv_model.get_first_stage_encoding(
+                self.mv_model.encode_first_stage(imgs)
+            )
         return latents  # [B
 
     def mv_get_latents(
