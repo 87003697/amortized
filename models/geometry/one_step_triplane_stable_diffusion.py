@@ -151,6 +151,28 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
             styles = styles,
         )
         return output
+    
+    def denoise(
+        self,
+        noisy_input: Any,
+        text_embed: Float[Tensor, "B C"],
+        timestep
+    ) -> Any:
+        output = self.space_generator.forward_denoise(
+            text_embed = text_embed,
+            noisy_input = noisy_input,
+            t = timestep
+        )
+        return output
+    
+    def decode(
+        self,
+        latents: Any,
+    ) -> Any:
+        triplane = self.space_generator.forward_decode(
+            latents = latents
+        )
+        return triplane
 
     def interpolate_encodings(
         self,

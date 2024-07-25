@@ -1149,8 +1149,8 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             return {
                 "loss_asd": self.cfg.sd_weight * loss_sd + self.cfg.mv_weight * loss_mv,
                 "grad_norm_asd": self.cfg.sd_weight * grad_sd + self.cfg.mv_weight * grad_mv,
-                "min_step": self.min_step,
-                "max_step": self.max_step,
+                # "min_step": self.min_step,
+                # "max_step": self.max_step,
             }
         else:
             # return the loss and grad_norm for the 1st renderings
@@ -1166,8 +1166,8 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             guidance_1st =  {
                 "loss_asd": loss,
                 "grad_norm_asd": grad_norm,
-                "min_step": self.min_step,
-                "max_step": self.max_step,
+                # "min_step": self.min_step,
+                # "max_step": self.max_step,
             }
 
             # return the loss and grad_norm for the 2nd renderings
@@ -1183,8 +1183,8 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             guidance_2nd =  {
                 "loss_asd": loss,
                 "grad_norm_asd": grad_norm,
-                "min_step": self.min_step,
-                "max_step": self.max_step,
+                # "min_step": self.min_step,
+                # "max_step": self.max_step,
             }
             return guidance_1st, guidance_2nd
 

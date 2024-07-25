@@ -438,7 +438,7 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
     def __call__(
         self, attn: Attention, hidden_states, encoder_hidden_states=None, attention_mask=None, scale=1.0, temb=None
     ):
-        
+        # import pdb; pdb.set_trace()
         assert encoder_hidden_states is not None, "The encoder_hidden_states should not be None."
 
         residual = hidden_states
@@ -518,6 +518,7 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
         attention_probs = attn.get_attention_scores(query, key, attention_mask)
         hidden_states = torch.bmm(attention_probs, value)
         hidden_states = attn.batch_to_head_dim(hidden_states)
+
 
         ############################################################################################################
         # linear proj
@@ -775,14 +776,40 @@ class OneStepTriplaneStableDiffusion(BaseModule):
         text_embed,
         styles,
     ):
+
         batch_size = text_embed.size(0)
-        noise_shape = styles.size(-2)
 
         # set timestep
         t = torch.ones(
             batch_size * self.num_planes,
             ).to(text_embed.device) * self.timestep
         t = t.long()
+
+        noise_pred = self.forward_denoise(text_embed, styles,t)
+
+        # transform the noise_pred to the original shape
+        alphas = self.alphas.to(text_embed.device)[t]
+        sigmas = self.sigmas.to(text_embed.device)[t]
+        latents = (
+            1
+            / alphas.view(-1, 1, 1, 1)
+            * (styles - sigmas.view(-1, 1, 1, 1) * noise_pred)
+        )
+
+        # decode the latents to triplane
+        latents = 1 / self.vae.config.scaling_factor * latents
+        triplane = self.forward_decode(latents)
+        return triplane
+        
+    def forward_denoise(
+        self, 
+        text_embed,
+        noisy_input,
+        t,
+    ):
+
+        batch_size = text_embed.size(0)
+        noise_shape = noisy_input.size(-2)
 
         if text_embed.ndim == 3:
             # same text_embed for all planes
@@ -797,29 +824,22 @@ class OneStepTriplaneStableDiffusion(BaseModule):
         if hasattr(self, "prompt_bias"):
             text_embed = text_embed + self.prompt_bias.repeat(batch_size, 1, 1)
 
-        # reshape the styles
-        styles = styles.view(-1, 4, noise_shape, noise_shape)
+        noisy_input = noisy_input.view(-1, 4, noise_shape, noise_shape)
         noise_pred = self.unet(
-            styles,
+            noisy_input,
             t,
             encoder_hidden_states=text_embed
         ).sample
 
-        # transform the noise_pred to the original shape
-        alphas = self.alphas.to(text_embed.device)[t]
-        sigmas = self.sigmas.to(text_embed.device)[t]
-        latents = (
-            1
-            / alphas.view(-1, 1, 1, 1)
-            * (styles - sigmas.view(-1, 1, 1, 1) * noise_pred)
-        )
 
-        # decode the latents to triplane
-        latents = 1 / self.vae.config.scaling_factor * latents
+        return noise_pred
+
+    def forward_decode(
+        self,
+        latents,
+    ):
+        latents = latents.view(-1, 4, *latents.shape[-2:])
         triplane = self.vae.decode(latents).sample
-        
-        # triplane = (triplane * 0.5 + 0.5).clamp(0, 1) # no need for  
-        triplane = triplane.view(batch_size, self.num_planes, -1, *triplane.shape[-2:])
+        triplane = triplane.view(-1, self.num_planes, self.cfg.output_dim, *triplane.shape[-2:])
 
         return triplane
-        

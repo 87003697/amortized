@@ -31,7 +31,7 @@ from PIL import Image
 from functools import partial
 
 @dataclass
-class MultiviewMultipromptDualRendererSemiSupervisedDataModuleConfig:
+class MultiviewMultipromptDualRendererMultiStepDataModuleConfig:
     # height, width, and batch_size should be Union[int, List[int]]
     # but OmegaConf does not support Union of containers
     batch_size: Any = 4
@@ -92,6 +92,9 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModuleConfig:
     target_prompt: Optional[str] = None
     eval_fix_camera: Optional[int] = None # can be int, then fix the camera to the specified view
 
+    # number of steps for the training
+    n_steps: int = 4
+
 class BaseDataset(Dataset, Updateable):
     def __init__(
             self, 
@@ -101,7 +104,7 @@ class BaseDataset(Dataset, Updateable):
             prompt_processor = None
         ) -> None:
         super().__init__()
-        self.cfg: MultiviewMultipromptDualRendererSemiSupervisedDataModuleConfig = cfg        
+        self.cfg: MultiviewMultipromptDualRendererMultiStepDataModuleConfig = cfg        
         ##############################################################################################################
         self.batch_size: int = self.cfg.batch_size
         # the following config may be updated along with the training process
@@ -621,7 +624,7 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Test(BaseDataset)
                 # "prompt_utils": self.prompt_processor([x for x in batch["prompt"]]),
                 "noise": torch.randn(real_batch_size, *self.cfg.dim_gaussian).view(-1, *self.cfg.dim_gaussian[1:]) \
                     if not self.cfg.pure_zeros \
-                        else torch.zeros(real_batch_size, *self.cfg.dim_gaussian).view(-1, *self.cfg.dim_gaussian[1:])
+                        else torch.zeros(real_batch_size, *self.cfg.dim_gaussian).view(-1, *self.cfg.dim_gaussian[1:]) 
             }
         )
 
@@ -681,6 +684,7 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
         assert self.sup_or_unsup in ["sup", "unsup"]
 
         if self.sup_or_unsup == "sup":
+
             idx = np.random.randint(0, self.sup_length)
             #  get the idx-th prompt, self.sup_obj_library is a dict
             obj_name, obj_attributes = list(self.sup_obj_library.items())[idx]
@@ -783,62 +787,69 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
 
         elif self.sup_or_unsup == "unsup":
 
-            real_batch_size = 1 # as this function is in __getitem__, the batch size is 1
+            real_batch_size = 1
+            return_list = []
+            # loop for n_steps
+            for i in range(self.cfg.n_steps):
+                    
+                # generate camera data for n_steps batches
+                #################################################################################################
+                # sample elevation angles
+                elevation_deg: Float[Tensor, "B"] = (
+                        torch.rand(real_batch_size)
+                        * (self.elevation_range[1] - self.elevation_range[0])
+                        + self.elevation_range[0]
+                ).repeat_interleave(self.cfg.n_view, dim=0)
+                # elevation: Float[Tensor, "B"] = elevation_deg * math.pi / 180
 
-            #################################################################################################
-            # sample elevation angles
-            elevation_deg: Float[Tensor, "B"] = (
+                ##############################################################################################################
+                # sample azimuth angles, ensures sampled azimuth angles in a batch cover the whole range
+                azimuth_deg: Float[Tensor, "B"] = (
+                    torch.rand(real_batch_size).reshape(-1, 1)
+                    + torch.arange(self.cfg.n_view).reshape(1, -1)
+                ).reshape(-1) / self.cfg.n_view * (
+                    self.azimuth_range[1] - self.azimuth_range[0]
+                ) + self.azimuth_range[
+                    0
+                ]
+                # azimuth: Float[Tensor, "B"] = azimuth_deg * math.pi / 180
+
+                ##############################################################################################################
+                # sample fovs from a uniform distribution bounded by fov_range
+                fovy_deg: Float[Tensor, "B"] = (
+                    torch.rand(real_batch_size) * (self.fovy_range[1] - self.fovy_range[0])
+                    + self.fovy_range[0]
+                ).repeat_interleave(self.cfg.n_view, dim=0)
+                # fovy = fovy_deg * math.pi / 180
+
+                ##############################################################################################################
+                # sample distances from a uniform distribution bounded by distance_range
+                camera_distances: Float[Tensor, "B"] = (
                     torch.rand(real_batch_size)
-                    * (self.elevation_range[1] - self.elevation_range[0])
-                    + self.elevation_range[0]
-            ).repeat_interleave(self.cfg.n_view, dim=0)
-            # elevation: Float[Tensor, "B"] = elevation_deg * math.pi / 180
+                    * (self.camera_distance_range[1] - self.camera_distance_range[0])
+                    + self.camera_distance_range[0]
+                ).repeat_interleave(self.cfg.n_view, dim=0)
 
-            ##############################################################################################################
-            # sample azimuth angles, ensures sampled azimuth angles in a batch cover the whole range
-            azimuth_deg: Float[Tensor, "B"] = (
-                torch.rand(real_batch_size).reshape(-1, 1)
-                + torch.arange(self.cfg.n_view).reshape(1, -1)
-            ).reshape(-1) / self.cfg.n_view * (
-                self.azimuth_range[1] - self.azimuth_range[0]
-            ) + self.azimuth_range[
-                0
-            ]
-            # azimuth: Float[Tensor, "B"] = azimuth_deg * math.pi / 180
-
-            ##############################################################################################################
-            # sample fovs from a uniform distribution bounded by fov_range
-            fovy_deg: Float[Tensor, "B"] = (
-                torch.rand(real_batch_size) * (self.fovy_range[1] - self.fovy_range[0])
-                + self.fovy_range[0]
-            ).repeat_interleave(self.cfg.n_view, dim=0)
-            # fovy = fovy_deg * math.pi / 180
-
-            ##############################################################################################################
-            # sample distances from a uniform distribution bounded by distance_range
-            camera_distances: Float[Tensor, "B"] = (
-                torch.rand(real_batch_size)
-                * (self.camera_distance_range[1] - self.camera_distance_range[0])
-                + self.camera_distance_range[0]
-            ).repeat_interleave(self.cfg.n_view, dim=0)
-
-            #################################################################################################
-            # sample the prompt
-            idx = np.random.randint(0, self.unsup_length)
-            prompt = self.unsup_prompt_library[idx]
+                #################################################################################################
+                # sample the prompt
+                idx = np.random.randint(0, self.unsup_length)
+                prompt = self.unsup_prompt_library[idx]
 
 
-            return {
-                "prompt": prompt,
-                "prompt_utils": self.prompt_processor(prompt),
-                # camera data
-                "azimuths_deg": azimuth_deg,
-                "elevations_deg": elevation_deg,
-                "distances": camera_distances,
-                "fovys_deg": fovy_deg
-            }
+                return_list.append(
+                    {
+                        "prompt": prompt,
+                        "prompt_utils": self.prompt_processor(prompt),
+                        # camera data
+                        "azimuths_deg": azimuth_deg,
+                        "elevations_deg": elevation_deg,
+                        "distances": camera_distances,
+                        "fovys_deg": fovy_deg
+                    }
+                )
+            return return_list
         
-    def collate(self, batch) -> Dict[str, Any]:
+    def collate(self, batch_list) -> Dict[str, Any]:
 
         assert (
             self.batch_size % self.cfg.n_view == 0
@@ -847,50 +858,55 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
 
 
         if self.sup_or_unsup == "sup":
-            # ground truth images and camera data should be stacked
-            batch = super().collate(batch)
-            batch.update(
-                self._create_camera_from_angle(
-                    elevation_deg=batch.pop("elevations_deg").view(-1), # the following items are popped
-                    azimuth_deg=batch.pop("azimuths_deg").view(-1),
-                    camera_distances=batch.pop("distances").view(-1),
-                    fovy_deg=batch.pop("fovys_deg").view(-1),
-                    relative_radius=False,
-                    phase="train"
-                )
-            )
+            raise ValueError("The supervised data should be used in a single step")
+            # # ground truth images and camera data should be stacked
+            # batch = super().collate(batch)
+            # batch.update(
+            #     self._create_camera_from_angle(
+            #         elevation_deg=batch.pop("elevations_deg").view(-1), # the following items are popped
+            #         azimuth_deg=batch.pop("azimuths_deg").view(-1),
+            #         camera_distances=batch.pop("distances").view(-1),
+            #         fovy_deg=batch.pop("fovys_deg").view(-1),
+            #         relative_radius=False,
+            #         phase="train"
+            #     )
+            # )
         else:
-            batch = super().collate(batch)
-            batch.update(
-                self._create_camera_from_angle(
-                    elevation_deg=batch.pop("elevations_deg").view(-1), # the following items are popped
-                    azimuth_deg=batch.pop("azimuths_deg").view(-1),
-                    camera_distances=batch.pop("distances").view(-1),
-                    fovy_deg=batch.pop("fovys_deg").view(-1),
-                    relative_radius=self.cfg.relative_radius,
-                    phase="train"
+            return_list = []
+            for i in range(self.cfg.n_steps):
+                batch = super().collate([sup_batch[i] for sup_batch in batch_list])
+                batch.update(
+                    self._create_camera_from_angle(
+                        elevation_deg=batch.pop("elevations_deg").view(-1), # the following items are popped
+                        azimuth_deg=batch.pop("azimuths_deg").view(-1),
+                        camera_distances=batch.pop("distances").view(-1),
+                        fovy_deg=batch.pop("fovys_deg").view(-1),
+                        relative_radius=self.cfg.relative_radius,
+                        phase="train"
+                    )
                 )
-            )
 
-        # the following items are applied to both supervised and unsupervised data
-        batch.update(
-            {
-                "noise": torch.randn(real_batch_size, *self.cfg.dim_gaussian).view(-1, *self.cfg.dim_gaussian[1:]) \
-                    if not self.cfg.pure_zeros \
-                        else torch.zeros(real_batch_size, *self.cfg.dim_gaussian).view(-1, *self.cfg.dim_gaussian[1:])
-            }
-        )
+                if i == 0: # only add the following items once
+                    # the following items are applied to both supervised and unsupervised data
+                    batch.update(
+                        {
+                            "noise": torch.randn(real_batch_size, *self.cfg.dim_gaussian).view(-1, *self.cfg.dim_gaussian[1:]) \
+                                if not self.cfg.pure_zeros \
+                                    else torch.zeros(real_batch_size, *self.cfg.dim_gaussian).view(-1, *self.cfg.dim_gaussian[1:]) 
+                        }
+                    )
+                return_list.append(batch)
 
-        return batch
+        return return_list
             
             
-@register("multiview-multiprompt-dualrenderer-semisupervised-datamodule")
-class MultiviewMultipromptDualRendererSemiSupervisedDataModule(pl.LightningDataModule):
-    cfg: MultiviewMultipromptDualRendererSemiSupervisedDataModuleConfig
+@register("multiview-multiprompt-dualrenderer-multistep-datamodule")
+class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule):
+    cfg: MultiviewMultipromptDualRendererMultiStepDataModuleConfig
 
     def __init__(self, cfg: Optional[Union[dict, DictConfig]] = None) -> None:
         super().__init__()
-        self.cfg = parse_structured(MultiviewMultipromptDualRendererSemiSupervisedDataModuleConfig, cfg)
+        self.cfg = parse_structured(MultiviewMultipromptDualRendererMultiStepDataModuleConfig, cfg)
         ##############################################################################################################
         # load the prompt library
         path = os.path.join(
@@ -918,7 +934,7 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule(pl.LightningDataM
                 self.sup_obj_library = json.load(f)
 
         ##############################################################################################################
-        self.num_workers = 2 #0 # for debugging
+        self.num_workers = 0 #0 # for debugging
         self.pin_memory = False
         self.prefetch_factor = 2 if self.num_workers > 0 else None
 

@@ -413,6 +413,16 @@ class MultiPromptProcessorOutput:
     uncond_text_embeddings_2nd: Optional[Float[Tensor, "B ..."]] = None
     uncond_text_embeddings_vd_2nd: Optional[Float[Tensor, "B ..."]] = None
 
+    def get_uncond_text_embeddings(self):
+        batch_size = len(self.global_text_embeddings)
+        if self.use_view_dependent_text_embeddings is not None:
+            return self.uncond_text_embeddings[None, None, :, :].repeat(
+                batch_size, len(self.use_view_dependent_text_embeddings), 1, 1
+            ).to(self.device)
+        else:
+            return self.uncond_text_embeddings[None, :, :].repeat(
+                batch_size, 1, 1
+            ).to(self.device)
 
     def get_global_text_embeddings(
         self,
