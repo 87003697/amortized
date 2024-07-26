@@ -101,7 +101,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         )
 
         # This property activates manual optimization.
-        self.automatic_optimization = False
+        self.automatic_optimization = False 
 
         self.alphas: Float[Tensor, "..."] = self.noise_scheduler.alphas_cumprod.to(
             self.device
@@ -282,6 +282,10 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             batch_size=latent.shape[0],
         )
 
+        # zero the gradients
+        opt = self.optimizers()
+        opt.zero_grad()
+    
         for i, (t, batch) in enumerate(zip(timesteps, batch_list)):
 
             # prepare the text embeddings as input
@@ -332,15 +336,14 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 out, out_2nd, idx = i, **batch
             )
 
-            # update all trainable parameters
-            opt = self.optimizers()
-            opt.zero_grad()
-            self.manual_backward(loss["loss"])
-            opt.step()
+            # store gradients
+            self.manual_backward(loss["loss"] / self.cfg.num_steps_training)
 
             # prepare for the next iteration
             latent = denoised_latents.detach() # TODO: check if this is correct, or should be .detach()
 
+        # update the weights
+        opt.step()
 
     def validation_step(self, batch, batch_idx):
 
