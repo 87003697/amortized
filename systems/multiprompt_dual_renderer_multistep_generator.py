@@ -19,6 +19,7 @@ from threestudio.models.mesh import Mesh
 from diffusers import (
     DDPMScheduler,
     DPMSolverMultistepScheduler,
+    DDIMScheduler,
 )
 
 def sample_timesteps(
@@ -67,8 +68,11 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
         num_steps_training: int = 4
         num_steps_sampling: int = 25
+
         classifier_guidance_scale: float = 1.0
         
+        sample_scheduler: str = "ddpm" #any of "ddpm", "ddim", "dpm"
+        noise_scheduler: str = "ddim"
 
 
     cfg: Config
@@ -88,17 +92,12 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         if self.cfg.train_guidance: # if the guidance requires training, then it is initialized here
             self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
 
-        # SDE sampler for training
-        self.noise_scheduler = DDPMScheduler.from_pretrained(
-            self.cfg.scheduler_dir,
-            subfolder="scheduler",
-        )
+        # Sampler for training
+        self.noise_scheduler = self._configure_scheduler(self.cfg.noise_scheduler)
+        self.is_training_odd = True if self.cfg.noise_scheduler == "ddpm" else False
 
-        # ODE solver for inference
-        self.sample_scheduler = DPMSolverMultistepScheduler.from_pretrained(
-            self.cfg.scheduler_dir,
-            subfolder="scheduler",
-        )
+        # Sampler for inference
+        self.sample_scheduler = self._configure_scheduler(self.cfg.sample_scheduler)
 
         # This property activates manual optimization.
         self.automatic_optimization = False 
@@ -106,6 +105,24 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         self.alphas: Float[Tensor, "..."] = self.noise_scheduler.alphas_cumprod.to(
             self.device
         )
+
+    def _configure_scheduler(self, scheduler: str):
+        assert scheduler in ["ddpm", "ddim", "dpm"]
+        if scheduler == "ddpm":
+            return DDPMScheduler.from_pretrained(
+                self.cfg.scheduler_dir,
+                subfolder="scheduler",
+            )
+        elif scheduler == "ddim":
+            return DDIMScheduler.from_pretrained(
+                self.cfg.scheduler_dir,
+                subfolder="scheduler",
+            )
+        elif scheduler == "dpm":
+            return DPMSolverMultistepScheduler.from_pretrained(
+                self.cfg.scheduler_dir,
+                subfolder="scheduler",
+            )
 
 
     def on_fit_start(self) -> None:
@@ -236,7 +253,8 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
             # prepare inputs
             noisy_latent_input = self.sample_scheduler.scale_model_input(
-                latents, t
+                latents, 
+                t
             )
             noisy_latent_input = torch.cat([noisy_latent_input] * 2, dim=0)
 
@@ -297,13 +315,20 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 batch["text_embed"] = prompt_utils.get_global_text_embeddings()
                 batch["text_embed_bg"] = prompt_utils.get_global_text_embeddings(use_local_text_embeddings = False)
         
-            # add noise to the latent
-            noise = torch.randn_like(latent)
-            noisy_latent = self.noise_scheduler.add_noise(
-                latent,
-                noise,
-                t,
-            )
+
+            if self.is_training_odd:
+                # add noise to the latent
+                noise = torch.randn_like(latent)
+                noisy_latent = self.noise_scheduler.add_noise(
+                    latent,
+                    noise,
+                    t,
+                )
+            else:
+                noisy_latent = self.noise_scheduler.scale_model_input(
+                    latent,
+                    t,
+                )
         
             # prepare the text embeddings as input
             text_embed = batch["text_embed"]
