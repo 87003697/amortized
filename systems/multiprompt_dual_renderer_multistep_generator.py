@@ -340,8 +340,8 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             self.manual_backward(loss["loss"] / self.cfg.num_steps_training)
 
             # prepare for the next iteration
-            latent = denoised_latents.detach() # TODO: check if this is correct, or should be .detach()
-
+            latent = denoised_latents.detach()
+            
         # update the weights
         opt.step()
 
