@@ -27,7 +27,7 @@ def sample_timesteps(
     num_parts: int,
     batch_size: int = 1,
 ):
-    # separate the timestep into num_steps_training parts
+    # separate the timestep into num_parts_training parts
     timesteps = []
     for i in range(num_parts):
         length_timestep = len(all_timesteps) // num_parts
@@ -66,12 +66,16 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         # scheduler path
         scheduler_dir: str = "pretrained/stable-diffusion-2-1-base"
 
-        num_steps_training: int = 4
-        num_steps_sampling: int = 25
+        # the followings are related to the multi-step diffusion
+        pure_zeros_training: bool = False
+        num_parts_training: int = 4
+
+        num_steps_training: int = 50
+        num_steps_sampling: int = 50
 
         classifier_guidance_scale: float = 1.0
         
-        sample_scheduler: str = "ddpm" #any of "ddpm", "ddim", "dpm"
+        sample_scheduler: str = "ddpm" #any of "ddpm", "ddim"
         noise_scheduler: str = "ddim"
 
 
@@ -102,9 +106,6 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         # This property activates manual optimization.
         self.automatic_optimization = False 
 
-        self.alphas: Float[Tensor, "..."] = self.noise_scheduler.alphas_cumprod.to(
-            self.device
-        )
 
     def _configure_scheduler(self, scheduler: str):
         assert scheduler in ["ddpm", "ddim", "dpm"]
@@ -292,12 +293,14 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             Diffusion Forward Process
             but supervised by the 2D guidance
         """
-        
         latent = batch_list[0]["noise"]
+        batch_size = batch_list[0]["prompt_utils"].get_global_text_embeddings().shape[0] # sort of hacky
+
+        self.noise_scheduler.set_timesteps(self.cfg.num_steps_training)
         timesteps = sample_timesteps(
             self.noise_scheduler.timesteps,
-            num_parts = self.cfg.num_steps_training,
-            batch_size=latent.shape[0],
+            num_parts = self.cfg.num_parts_training,
+            batch_size=batch_size,
         )
 
         # zero the gradients
@@ -315,21 +318,14 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 batch["text_embed"] = prompt_utils.get_global_text_embeddings()
                 batch["text_embed_bg"] = prompt_utils.get_global_text_embeddings(use_local_text_embeddings = False)
         
-
-            if self.is_training_odd:
-                # add noise to the latent
-                noise = torch.randn_like(latent)
-                noisy_latent = self.noise_scheduler.add_noise(
-                    latent,
-                    noise,
-                    t,
-                )
-            else:
-                noisy_latent = self.noise_scheduler.scale_model_input(
-                    latent,
-                    t,
-                )
-        
+            # add noise to the latent
+            noise = torch.randn_like(latent) if not self.cfg.pure_zeros_training else torch.zeros_like(latent)
+            noisy_latent = self.noise_scheduler.add_noise(
+                latent,
+                noise,
+                t,
+            )
+ 
             # prepare the text embeddings as input
             text_embed = batch["text_embed"]
             # under 10% of the time, the text embed is set to None
@@ -343,9 +339,13 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 timestep = t.to(self.device),
             )
 
+
             # convert epsilon into x0
-            alpha = (self.alphas[t] ** 0.5).view(-1, 1, 1, 1).to(self.device)
-            sigma = ((1 - self.alphas[t]) ** 0.5).view(-1, 1, 1, 1).to(self.device)
+            alphas: Float[Tensor, "..."] = self.noise_scheduler.alphas_cumprod.to(
+                self.device
+            )
+            alpha = (alphas[t] ** 0.5).view(-1, 1, 1, 1).to(self.device)
+            sigma = ((1 - alphas[t]) ** 0.5).view(-1, 1, 1, 1).to(self.device)
             denoised_latents = (
                 noisy_latent - sigma * noise_pred
             ) / alpha
@@ -362,7 +362,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             )
 
             # store gradients
-            self.manual_backward(loss["loss"] / self.cfg.num_steps_training)
+            self.manual_backward(loss["loss"] / self.cfg.num_parts_training)
 
             # prepare for the next iteration
             latent = denoised_latents.detach()
