@@ -299,7 +299,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         self.noise_scheduler.set_timesteps(self.cfg.num_steps_training)
         timesteps = sample_timesteps(
             self.noise_scheduler.timesteps,
-            num_parts = self.cfg.num_parts_training,
+            num_parts = self.cfg.num_parts_training, 
             batch_size=batch_size,
         )
 
