@@ -26,17 +26,33 @@ def sample_timesteps(
     all_timesteps: List,
     num_parts: int,
     batch_size: int = 1,
+    split_parts: Optional[str] = None,
 ):
+    assert split_parts in [None, "v1", "v2"]
     # separate the timestep into num_parts_training parts
     timesteps = []
-    for i in range(num_parts):
-        length_timestep = len(all_timesteps) // num_parts
-        timestep = all_timesteps[
-            i * length_timestep : (i + 1) * length_timestep
-        ]
-        # sample only one from the timestep
-        idx = torch.randint(0, len(timestep), (batch_size,))
-        timesteps.append(timestep[idx])
+
+    if split_parts in [None, "v1"]:
+        for i in range(num_parts):
+            length_timestep = len(all_timesteps) // num_parts
+            timestep = all_timesteps[
+                i * length_timestep : (i + 1) * length_timestep
+            ]
+            # sample only one from the timestep
+            idx = torch.randint(0, len(timestep), (batch_size,))
+            timesteps.append(timestep[idx])
+    elif split_parts == "v2":
+        for i in range(num_parts):
+            if i == 0: # always start from the beginning
+                timestep = all_timesteps[:1]
+            else:
+                length_timestep = len(all_timesteps) // (num_parts - 1)
+                timestep = all_timesteps[
+                    (i - 1) * length_timestep : i * length_timestep
+                ]
+            # sample only one from the timestep
+            idx = torch.randint(0, len(timestep), (batch_size,))
+            timesteps.append(timestep[idx])
     return timesteps
 
 @threestudio.register("multiprompt-dual-renderer-multistep-generator-system")
@@ -69,11 +85,13 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         # the followings are related to the multi-step diffusion
         pure_zeros_training: bool = False
         num_parts_training: int = 4
+        split_parts: Optional[str] = None # any of None, "v1", "v2"
 
         num_steps_training: int = 50
         num_steps_sampling: int = 50
 
-        classifier_guidance_scale: float = 1.0
+        classifier_guidance_scale_training: float = 1.0
+        classifier_guidance_scale_sampling: float = 1.0
         
         sample_scheduler: str = "ddpm" #any of "ddpm", "ddim"
         noise_scheduler: str = "ddim"
@@ -267,7 +285,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             )
 
             noise_pred_cond, noise_pred_uncond = noise_pred.chunk(2)
-            noise_pred = noise_pred_uncond + self.cfg.classifier_guidance_scale * (
+            noise_pred = noise_pred_uncond + self.cfg.classifier_guidance_scale_sampling * (
                 noise_pred_cond - noise_pred_uncond
             )
 
@@ -281,9 +299,6 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
         return space_cache
 
-            
-
-
     def training_step(
         self,
         batch_list: List[Dict[str, Any]],
@@ -294,13 +309,14 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             but supervised by the 2D guidance
         """
         latent = batch_list[0]["noise"]
-        batch_size = batch_list[0]["prompt_utils"].get_global_text_embeddings().shape[0] # sort of hacky
+        # batch_size = batch_list[0]["prompt_utils"].get_global_text_embeddings().shape[0] # sort of hacky
 
         self.noise_scheduler.set_timesteps(self.cfg.num_steps_training)
         timesteps = sample_timesteps(
             self.noise_scheduler.timesteps,
             num_parts = self.cfg.num_parts_training, 
-            batch_size=batch_size,
+            batch_size=1, #batch_size,
+            split_parts=self.cfg.split_parts,
         )
 
         # zero the gradients
@@ -326,19 +342,47 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 t,
             )
  
-            # prepare the text embeddings as input
-            text_embed = batch["text_embed"]
-            # under 10% of the time, the text embed is set to None
-            if torch.rand(1) < 0.1:
-                text_embed = prompt_utils.get_uncond_text_embeddings()
 
-            # predict the noise added
-            noise_pred = self.geometry.denoise(
-                noisy_input = noisy_latent,
-                text_embed = text_embed, # TODO: text_embed might be null
-                timestep = t.to(self.device),
-            )
+            if self.cfg.classifier_guidance_scale_training == 1.0:
+                # prepare the text embeddings as input
+                text_embed = batch["text_embed"]
+                # under 10% of the time, the text embed is set to None
+                if torch.rand(1) < 0.1:
+                    text_embed = prompt_utils.get_uncond_text_embeddings()
 
+                # predict the noise added
+                noise_pred = self.geometry.denoise(
+                    noisy_input = noisy_latent,
+                    text_embed = text_embed, # TODO: text_embed might be null
+                    timestep = t.to(self.device),
+                )
+            else: # perform the classifier guidance at the training time
+                # prepare the input
+                text_embed = torch.cat(
+                    [
+                        batch["text_embed"],
+                        prompt_utils.get_uncond_text_embeddings(),
+                    ],
+                    dim=0,
+                )
+
+                noisy_latent_input = torch.cat([noisy_latent] * 2, dim=0)
+
+                # currently do not support set different timesteps among batch
+                # t = t.repeat_interleave(2) 
+
+                # predict the noise added
+                noise_pred = self.geometry.denoise(
+                    noisy_input = noisy_latent_input,
+                    text_embed = text_embed, # TODO: text_embed might be null
+                    timestep = t.to(self.device),
+                )
+
+                # perform the classifier guidance
+                noise_pred_cond, noise_pred_uncond = noise_pred.chunk(2)
+                noise_pred = noise_pred_uncond + self.cfg.classifier_guidance_scale_training * (
+                    noise_pred_cond - noise_pred_uncond
+                )
 
             # convert epsilon into x0
             alphas: Float[Tensor, "..."] = self.noise_scheduler.alphas_cumprod.to(
