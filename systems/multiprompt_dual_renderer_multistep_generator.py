@@ -688,8 +688,10 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         ]
         if get_rank() == 0: # only remove from one process
             for filestem in filestems:
+                files = os.listdir(os.path.join(self.get_save_dir(), filestem))
+                files = [f for f in files if os.path.isdir(os.path.join(self.get_save_dir(), filestem, f))]
                 for prompt in tqdm(
-                    os.listdir(os.path.join(self.get_save_dir(), filestem)),
+                    files,
                     desc="Generating validation videos",
                 ):
                     try:
@@ -723,8 +725,10 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         ]
         if get_rank() == 0: # only remove from one process
             for filestem in filestems:
+                files = os.listdir(os.path.join(self.get_save_dir(), filestem))
+                files = [f for f in files if os.path.isdir(os.path.join(self.get_save_dir(), filestem, f))]
                 for prompt in tqdm(
-                    os.listdir(os.path.join(self.get_save_dir(), filestem)),
+                    files,
                     desc="Generating validation videos",
                 ):
                     try:
