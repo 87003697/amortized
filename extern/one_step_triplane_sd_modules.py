@@ -567,6 +567,7 @@ class OneStepTriplaneStableDiffusion(BaseModule):
         cross_lora_type: str = "triple_v1"
         locon_type: str = "triple_v1"
         prompt_bias: bool = False
+        prompt_bias_lr_multiplier: float = 1.0
 
     cfg: Config
 
@@ -822,7 +823,7 @@ class OneStepTriplaneStableDiffusion(BaseModule):
             raise ValueError("The text_embed should be either 3D or 4D.")
         
         if hasattr(self, "prompt_bias"):
-            text_embed = text_embed + self.prompt_bias.repeat(batch_size, 1, 1)
+            text_embed = text_embed + self.prompt_bias.repeat(batch_size, 1, 1) * self.cfg.prompt_bias_lr_multiplier
 
         noisy_input = noisy_input.view(-1, 4, noise_shape, noise_shape)
         noise_pred = self.unet(
