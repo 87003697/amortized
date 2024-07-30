@@ -83,7 +83,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         scheduler_dir: str = "pretrained/stable-diffusion-2-1-base"
 
         # the followings are related to the multi-step diffusion
-        pure_zeros_training: bool = False
+        noise_addition: str = "gaussian" # any of "gaussian", "zero", "pred"
         num_parts_training: int = 4
         split_parts: Optional[str] = None # any of None, "v1", "v2"
 
@@ -331,11 +331,20 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 raise NotImplementedError
             else:
                 # more general case
-                batch["text_embed"] = prompt_utils.get_global_text_embeddings()
+                cond = prompt_utils.get_global_text_embeddings()
+                uncond = prompt_utils.get_uncond_text_embeddings()
                 batch["text_embed_bg"] = prompt_utils.get_global_text_embeddings(use_local_text_embeddings = False)
-        
+                batch["text_embed"] = cond
+
+            # choose the noise to be added
+            if self.cfg.noise_addition == "gaussian":
+                noise = torch.randn_like(latent)
+            elif self.cfg.noise_addition == "zero":
+                noise = torch.zeros_like(latent)
+            elif self.cfg.noise_addition == "pred": # use the network to predict the noise
+                noise = noise_pred.detach() if i > 0 else torch.randn_like(latent)
+
             # add noise to the latent
-            noise = torch.randn_like(latent) if not self.cfg.pure_zeros_training else torch.zeros_like(latent)
             noisy_latent = self.noise_scheduler.add_noise(
                 latent,
                 noise,
@@ -345,10 +354,10 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
             if self.cfg.classifier_guidance_scale_training == 1.0:
                 # prepare the text embeddings as input
-                text_embed = batch["text_embed"]
+                text_embed = cond
                 # under 10% of the time, the text embed is set to None
                 if torch.rand(1) < 0.1:
-                    text_embed = prompt_utils.get_uncond_text_embeddings()
+                    text_embed = uncond
 
                 # predict the noise added
                 noise_pred = self.geometry.denoise(
@@ -360,8 +369,8 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 # prepare the input
                 text_embed = torch.cat(
                     [
-                        batch["text_embed"],
-                        prompt_utils.get_uncond_text_embeddings(),
+                        cond,
+                        uncond,
                     ],
                     dim=0,
                 )
