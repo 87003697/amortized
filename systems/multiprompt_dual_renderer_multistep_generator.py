@@ -414,8 +414,16 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 out, out_2nd, idx = i, **batch
             )
 
+            if hasattr(self.cfg.loss, "weighting_strategy"):
+                if self.cfg.loss.weighting_strategy in ["v1"]:
+                    weight = 1.0 / self.cfg.num_parts_training
+                elif self.cfg.loss.weighting_strategy in ["v2"]:
+                    weight = (alpha / sigma).mean() # mean is for converting the batch to a scalar
+            else:
+                weight = 1.0 / self.cfg.num_parts_training
+
             # store gradients
-            self.manual_backward(loss["loss"] / self.cfg.num_parts_training)
+            self.manual_backward(weight * loss["loss"] )
 
             # prepare for the next iteration
             latent = denoised_latents.detach()
