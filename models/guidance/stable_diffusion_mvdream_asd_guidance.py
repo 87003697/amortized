@@ -28,6 +28,8 @@ from torch.utils.checkpoint import checkpoint_sequential, checkpoint
 from torch.nn.modules.container import ModuleList
 from extern.mvdream.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 
+from torch.autograd import Variable, grad as torch_grad
+from threestudio.utils.ops import SpecifyGradient
 
 @threestudio.register("stable-diffusion-mvdream-asynchronous-score-distillation-guidance")
 class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
@@ -86,7 +88,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
         # strategy to save memory
         gradient_checkpoint: bool = False
-        
+        auto_grad: bool = True
 
     cfg: Config
 
@@ -398,7 +400,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
         return noise_pred_text, noise_pred_uncond, noise_pred_text_second
 
-    def mv_grad_asd(
+    def _mv_grad_asd(
         self,
         rgb: Float[Tensor, "B H W C"],
         prompt_utils: PromptProcessorOutput,
@@ -604,7 +606,73 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             )
             return loss_asd, grad_norm
 
-
+    def mv_grad_asd(
+        self,
+        rgb: Float[Tensor, "B H W C"],
+        prompt_utils: PromptProcessorOutput,
+        elevation: Float[Tensor, "B"],
+        azimuth: Float[Tensor, "B"],
+        camera_distances: Float[Tensor, "B"],
+        c2w: Float[Tensor, "B 4 4"],
+        rgb_as_latents: bool = False,
+        fovy=None,
+        rgb_2nd: Optional[Float[Tensor, "B H W C"]] = None,
+        **kwargs,
+    ):
+        if self.cfg.auto_grad:
+            rgb_var = Variable(rgb, requires_grad=True)
+            if rgb_2nd is not None:
+                rgb_2nd_var = Variable(rgb_2nd, requires_grad=True)
+                loss_asd, norm_asd = self._mv_grad_asd(
+                    rgb_var, # change to rgb_var
+                    prompt_utils,
+                    elevation,
+                    azimuth,
+                    camera_distances,
+                    c2w,
+                    rgb_as_latents=rgb_as_latents,
+                    fovy=fovy,
+                    rgb_2nd=rgb_2nd_var, # change to rgb_2nd_var
+                    **kwargs,
+                )
+                grad_rgb, grad_rgb_2nd = torch_grad(loss_asd.sum(), ([rgb_var, rgb_2nd_var]))
+                loss_asd = torch.cat(
+                    [
+                        SpecifyGradient.apply(rgb, grad_rgb), 
+                        SpecifyGradient.apply(rgb_2nd, grad_rgb_2nd)
+                    ],
+                    dim=0
+                )
+                return loss_asd, norm_asd
+            else:
+                loss_asd, norm_asd = self._mv_grad_asd(
+                    rgb_var, # change to rgb_var
+                    prompt_utils,
+                    elevation,
+                    azimuth,
+                    camera_distances,
+                    c2w,
+                    rgb_as_latents=rgb_as_latents,
+                    fovy=fovy,
+                    rgb_2nd=rgb_2nd,
+                    **kwargs,
+                )
+                grad_rgb = torch_grad(loss_asd, rgb_var)[0]
+                loss_asd = SpecifyGradient.apply(rgb, grad_rgb)
+                return loss_asd, norm_asd
+        else:
+            return self._mv_grad_asd(
+                rgb,
+                prompt_utils,
+                elevation,
+                azimuth,
+                camera_distances,
+                c2w,
+                rgb_as_latents=rgb_as_latents,
+                fovy=fovy,
+                rgb_2nd=rgb_2nd,
+                **kwargs,
+            )
 
 
 ################################################################################################
@@ -766,7 +834,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         return noise_pred_text, noise_pred_uncond, noise_pred_vd_neg, noise_pred_second
 
 
-    def sd_grad_asd(
+    def _sd_grad_asd(
         self,
         rgb: Float[Tensor, "B H W C"],
         prompt_utils: PromptProcessorOutput,
@@ -967,7 +1035,79 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 ]
             )
             return loss_asd, grad_norm
-            
+
+    def sd_grad_asd(
+        self,
+        rgb: Float[Tensor, "B H W C"],
+        prompt_utils: PromptProcessorOutput,
+        elevation: Float[Tensor, "B"],
+        azimuth: Float[Tensor, "B"],
+        camera_distances: Float[Tensor, "B"],
+        c2w: Float[Tensor, "B 4 4"],
+        rgb_as_latents: bool = False,
+        fovy=None,
+        rgb_2nd: Optional[Float[Tensor, "B H W C"]] = None,
+        azimuth_2nd: Optional[Float[Tensor, "B"]] = None,
+        **kwargs,
+    ):
+        if self.cfg.auto_grad:
+            rgb_var = Variable(rgb, requires_grad=True)
+            if rgb_2nd is not None:
+                rgb_2nd_var = Variable(rgb_2nd, requires_grad=True)
+                loss_asd, norm_asd = self._sd_grad_asd(
+                    rgb_var, # change to rgb_var
+                    prompt_utils,
+                    elevation,
+                    azimuth,
+                    camera_distances,
+                    c2w,
+                    rgb_as_latents=rgb_as_latents,
+                    fovy=fovy,
+                    rgb_2nd=rgb_2nd_var, # change to rgb_2nd_var
+                    azimuth_2nd=azimuth_2nd,
+                    **kwargs,
+                )
+                grad_rgb, grad_rgb_2nd = torch_grad(loss_asd.sum(), ([rgb_var, rgb_2nd_var]))
+                loss_asd = torch.cat(
+                    [
+                        SpecifyGradient.apply(rgb, grad_rgb), 
+                        SpecifyGradient.apply(rgb_2nd, grad_rgb_2nd)
+                    ],
+                    dim=0
+                )
+                return loss_asd, norm_asd
+            else:
+                loss_asd, norm_asd = self._sd_grad_asd(
+                    rgb_var, # change to rgb_var
+                    prompt_utils,
+                    elevation,
+                    azimuth,
+                    camera_distances,
+                    c2w,
+                    rgb_as_latents=rgb_as_latents,
+                    fovy=fovy,
+                    rgb_2nd=rgb_2nd,
+                    azimuth_2nd=azimuth_2nd,
+                    **kwargs,
+                )
+                grad_rgb = torch_grad(loss_asd, rgb_var)[0]
+                loss_asd = SpecifyGradient.apply(rgb, grad_rgb)
+                return loss_asd, norm_asd
+        else:
+            return self._sd_grad_asd(
+                rgb,
+                prompt_utils,
+                elevation,
+                azimuth,
+                camera_distances,
+                c2w,
+                rgb_as_latents=rgb_as_latents,
+                fovy=fovy,
+                rgb_2nd=rgb_2nd,
+                azimuth_2nd=azimuth_2nd,
+                **kwargs,
+            )
+        
 ################################################################################################
 
 
@@ -1005,7 +1145,6 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
         idx += torch.arange(0, view_batch_size, self.cfg.mv_n_view, device=self.device, dtype=torch.long)
         return idx
-
 
     def __call__(
         self,
