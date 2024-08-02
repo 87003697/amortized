@@ -257,7 +257,6 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             timesteps = timesteps_orig + timesteps_delta
         else:
             raise NotImplementedError
-        import pdb; pdb.set_trace()
         return timesteps
 
 
