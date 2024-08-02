@@ -88,7 +88,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
         # strategy to save memory
         gradient_checkpoint: bool = False
-        auto_grad: bool = True
+        auto_grad: bool = False
 
     cfg: Config
 
