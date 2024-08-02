@@ -242,6 +242,25 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             "loss": loss["loss"] + loss_2nd["loss"]
         }
 
+    def _set_timesteps(
+        self,
+        scheduler,
+        num_steps: int,
+    ):
+        if self.cfg.split_parts in [None, "v1"]:
+            scheduler.set_timesteps(num_steps)
+            timesteps = scheduler.timesteps
+        elif self.cfg.split_parts in ["v2"]:
+            scheduler.set_timesteps(num_steps)
+            timesteps_orig = scheduler.timesteps
+            timesteps_delta = scheduler.config.num_train_timesteps - 1 - timesteps_orig.max() 
+            timesteps = timesteps_orig + timesteps_delta
+        else:
+            raise NotImplementedError
+        import pdb; pdb.set_trace()
+        return timesteps
+
+
     def diffusion_reverse(
         self,
         batch: Dict[str, Any],
@@ -263,8 +282,10 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             dim=0,
         )
 
-        self.sample_scheduler.set_timesteps(self.cfg.num_steps_sampling)
-        timesteps = self.sample_scheduler.timesteps
+        timesteps = self._set_timesteps(
+            self.sample_scheduler,
+            self.cfg.num_steps_sampling,
+        )
 
         latents = batch.pop("noise")
 
@@ -311,9 +332,13 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         latent = batch_list[0]["noise"]
         # batch_size = batch_list[0]["prompt_utils"].get_global_text_embeddings().shape[0] # sort of hacky
 
-        self.noise_scheduler.set_timesteps(self.cfg.num_steps_training)
+        all_timesteps = self._set_timesteps(
+            self.noise_scheduler,
+            self.cfg.num_steps_training,
+        )
+
         timesteps = sample_timesteps(
-            self.noise_scheduler.timesteps,
+            all_timesteps,
             num_parts = self.cfg.num_parts_training, 
             batch_size=1, #batch_size,
             split_parts=self.cfg.split_parts,
