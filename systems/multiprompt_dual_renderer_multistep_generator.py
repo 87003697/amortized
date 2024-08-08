@@ -96,6 +96,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         sample_scheduler: str = "ddpm" #any of "ddpm", "ddim"
         noise_scheduler: str = "ddim"
 
+        specifiy_guidance_timestep: Optional[str] = None # any of None, v1;  control the guidance timestep
 
     cfg: Config
 
@@ -207,6 +208,17 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         # guidance for the first renderer
         guidance_inp = out["comp_rgb"]
 
+        # specify the timestep range for the guidance
+        if self.cfg.specifiy_guidance_timestep in [None]:
+            timestep_range = None
+        elif self.cfg.specifiy_guidance_timestep in ["v1"]:
+            timestep_range = [
+                (self.cfg.num_parts_training - idx - 1) / self.cfg.num_parts_training, # min
+                (self.cfg.num_parts_training - idx) / self.cfg.num_parts_training # max
+            ]
+        else:
+            raise NotImplementedError
+
         # guidance for the second renderer
         guidance_inp_2nd = out_2nd["comp_rgb"]
 
@@ -217,6 +229,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 # batch["prompt_utils"], 
                 **batch, 
                 rgb_as_latents=self.cfg.rgb_as_latents,
+                timestep_range=timestep_range,
             )
 
             guidance_out_2nd = self.guidance(
@@ -224,6 +237,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 # batch["prompt_utils"],
                 **batch, 
                 rgb_as_latents=self.cfg.rgb_as_latents,
+                timestep_range=timestep_range,
             )
         else:
             # the guidance is computed in parallel
@@ -233,8 +247,8 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 **batch,
                 rgb_as_latents=self.cfg.rgb_as_latents,
                 rgb_2nd = guidance_inp_2nd,
+                timestep_range=timestep_range,
             )
-
         loss = self._compute_loss(guidance_out, out, renderer="1st", step = idx, **batch)
         loss_2nd = self._compute_loss(guidance_out_2nd, out_2nd, renderer="2nd", step = idx, **batch)
 

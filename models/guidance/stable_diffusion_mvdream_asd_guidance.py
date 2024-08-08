@@ -97,6 +97,21 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         self.min_step = int(self.num_train_timesteps * min_step_percent)
         self.max_step = int(self.num_train_timesteps * max_step_percent)
 
+    def adapt_timestep_range(self, timestep_range: Optional[Tuple[float, float]]):
+        # determine the timestamp
+        if timestep_range is None:
+            min_t = self.min_step
+            max_t = self.max_step
+        else:
+            assert len(timestep_range) == 2
+            min_t_ratio, max_t_ratio = timestep_range
+            max_t = int(max_t_ratio * (self.max_step - self.min_step) + self.min_step)
+            max_t = max(min(max_t, self.max_step), self.min_step) # clip the value
+            min_t = int(min_t_ratio * (self.max_step - self.min_step) + self.min_step)
+            min_t = max(min(min_t, self.max_step), self.min_step) # clip the value
+        return min_t, max_t
+
+
     def configure(self) -> None:
 
         ################################################################################################
@@ -411,6 +426,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         rgb_as_latents: bool = False,
         fovy=None,
         rgb_2nd: Optional[Float[Tensor, "B H W C"]] = None,
+        timestep_range: Optional[Tuple[int, int]] = None,
         **kwargs,
     ):
 
@@ -512,10 +528,11 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         assert self.min_step is not None and self.max_step is not None
         with torch.no_grad():
 
+            min_t, max_t = self.adapt_timestep_range(timestep_range)
             if is_dual and self.cfg.dual_render_sync_t:
                 _t = torch.randint(
-                    self.min_step,
-                    self.max_step + 1,
+                    min_t,
+                    max_t,
                     [text_batch_size],
                     dtype=torch.long,
                     device=self.device,
@@ -531,8 +548,8 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
             else:
                 _t = torch.randint(
-                    self.min_step,
-                    self.max_step + 1,
+                    min_t,
+                    max_t,
                     [text_batch_size if not is_dual else 2 * text_batch_size],
                     dtype=torch.long,
                     device=self.device,
@@ -846,6 +863,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         fovy=None,
         rgb_2nd: Optional[Float[Tensor, "B H W C"]] = None,
         azimuth_2nd: Optional[Float[Tensor, "B"]] = None,
+        timestep_range: Optional[Tuple[int, int]] = None,
         **kwargs,
     ):
         # determine if dual rendering is enabled
@@ -934,10 +952,11 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         assert self.min_step is not None and self.max_step is not None
         with torch.no_grad():
 
+            min_t, max_t = self.adapt_timestep_range(timestep_range)
             if is_dual and self.cfg.dual_render_sync_t:
                 t = torch.randint(
-                    self.min_step,
-                    self.max_step + 1,
+                    min_t,
+                    max_t,
                     [view_batch_size],
                     dtype=torch.long,
                     device=self.device,
@@ -952,8 +971,8 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 
             else:
                 t = torch.randint(
-                    self.min_step,
-                    self.max_step + 1,
+                    min_t,
+                    max_t,
                     [img_batch_size],
                     dtype=torch.long,
                     device=self.device,
