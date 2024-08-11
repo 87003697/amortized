@@ -459,7 +459,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                     weight = (alpha / sigma).mean() # mean is for converting the batch to a scalar
                 elif self.cfg.loss.weighting_strategy in ["v3"]:
                     # follow SDS
-                    weight = sigma.mean() # mean is for converting the batch to a scalar
+                    weight = (sigma**2).mean() # mean is for converting the batch to a scalar
                 else:
                     raise NotImplementedError
             else:
