@@ -249,11 +249,12 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 rgb_2nd = guidance_inp_2nd,
                 timestep_range=timestep_range,
             )
-        loss = self._compute_loss(guidance_out, out, renderer="1st", step = idx, **batch)
-        loss_2nd = self._compute_loss(guidance_out_2nd, out_2nd, renderer="2nd", step = idx, **batch)
+        loss_dict = self._compute_loss(guidance_out, out, renderer="1st", step = idx, **batch)
+        loss_dict_2nd = self._compute_loss(guidance_out_2nd, out_2nd, renderer="2nd", step = idx, **batch)
 
         return {
-            "loss": loss["loss"] + loss_2nd["loss"]
+            "fidelity_loss": loss_dict["fidelity_loss"] + loss_dict_2nd["fidelity_loss"],
+            "regularization_loss": loss_dict["regularization_loss"] + loss_dict_2nd["regularization_loss"],            
         }
 
     def _set_timesteps(
@@ -448,25 +449,39 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
             # render the image and compute the gradients
             out, out_2nd = self.forward_rendering(batch)
-            loss = self.compute_guidance_n_loss(
+            loss_dict = self.compute_guidance_n_loss(
                 out, out_2nd, idx = i, **batch
             )
+            fidelity_loss = loss_dict["fidelity_loss"]
+            regularization_loss = loss_dict["regularization_loss"]
 
             if hasattr(self.cfg.loss, "weighting_strategy"):
                 if self.cfg.loss.weighting_strategy in ["v1"]:
-                    weight = 1.0 / self.cfg.num_parts_training
+                    weight_fide = 1.0 / self.cfg.num_parts_training
+                    weight_regu = 1.0 / self.cfg.num_parts_training
                 elif self.cfg.loss.weighting_strategy in ["v2"]:
-                    weight = (alpha / sigma).mean() # mean is for converting the batch to a scalar
+                    weight_fide = (alpha / sigma).mean() # mean is for converting the batch to a scalar
+                    weight_regu = (alpha / sigma).mean() 
+                elif self.cfg.loss.weighting_strategy in ["v2-2"]:
+                    weight_fide = 1.0 / self.cfg.num_parts_training
+                    weight_regu = (alpha / sigma).mean()
                 elif self.cfg.loss.weighting_strategy in ["v3"]:
                     # follow SDS
-                    weight = (sigma**2).mean() # mean is for converting the batch to a scalar
+                    weight_fide = (sigma**2).mean()
+                    weight_regu = (sigma**2).mean() 
+                elif self.cfg.loss.weighting_strategy in ["v3-2"]:
+                    weight_fide = 1.0 / self.cfg.num_parts_training
+                    # follow SDS
+                    weight_regu = (sigma**2).mean()
                 else:
                     raise NotImplementedError
             else:
-                weight = 1.0 / self.cfg.num_parts_training
+                weight_fide = 1.0 / self.cfg.num_parts_training
+                weight_regu = 1.0 / self.cfg.num_parts_training
 
             # store gradients
-            self.manual_backward(weight * loss["loss"] )
+            loss = weight_fide * fidelity_loss + weight_regu * regularization_loss
+            self.manual_backward(loss)
 
             # prepare for the next iteration
             latent = denoised_latents.detach()
@@ -528,16 +543,17 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         
         assert renderer in ["1st", "2nd"]
 
-        loss = 0.0
+        fide_loss = 0.0
+        regu_loss = 0.0
         for name, value in guidance_out.items():
             if renderer == "1st":
                 self.log(f"train/{name}_{step}", value)
                 if name.startswith("loss_"):
-                    loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")])
+                    fide_loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")])
             else:
                 self.log(f"train/{name}_2nd_{step}", value)
                 if name.startswith("loss_"):
-                    loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_") + "_2nd"])
+                    fide_loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_") + "_2nd"])
 
         if (renderer == "1st" and self.C(self.cfg.loss.lambda_orient) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_orient_2nd) > 0):
             if "normal" not in out:
@@ -550,19 +566,19 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             ).sum() / (out["opacity"] > 0).sum()
             if renderer == "1st":
                 self.log(f"train/loss_orient_{step}", loss_orient)
-                loss += loss_orient * self.C(self.cfg.loss.lambda_orient)
+                regu_loss += loss_orient * self.C(self.cfg.loss.lambda_orient)
             else:
                 self.log(f"train/loss_orient_2nd_{step}", loss_orient)
-                loss += loss_orient * self.C(self.cfg.loss.lambda_orient_2nd)
+                regu_loss += loss_orient * self.C(self.cfg.loss.lambda_orient_2nd)
 
         if (renderer == "1st" and self.C(self.cfg.loss.lambda_sparsity) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_sparsity_2nd) > 0):
             loss_sparsity = (out["opacity"] ** 2 + 0.01).sqrt().mean()
             if renderer == "1st":
                 self.log(f"train/loss_sparsity_{step}", loss_sparsity)
-                loss += loss_sparsity * self.C(self.cfg.loss.lambda_sparsity)
+                regu_loss += loss_sparsity * self.C(self.cfg.loss.lambda_sparsity)
             else:
                 self.log(f"train/loss_sparsity_2nd_{step}", loss_sparsity)
-                loss += loss_sparsity * self.C(self.cfg.loss.lambda_sparsity_2nd)
+                regu_loss += loss_sparsity * self.C(self.cfg.loss.lambda_sparsity_2nd)
 
 
         if (renderer == "1st" and self.C(self.cfg.loss.lambda_opaque) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_opaque_2nd) > 0):
@@ -570,10 +586,10 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             loss_opaque = binary_cross_entropy(opacity_clamped, opacity_clamped)
             if renderer == "1st":
                 self.log(f"train/loss_opaque_{step}", loss_opaque)
-                loss += loss_opaque * self.C(self.cfg.loss.lambda_opaque)
+                regu_loss += loss_opaque * self.C(self.cfg.loss.lambda_opaque)
             else:
                 self.log(f"train/loss_opaque_2nd_{step}", loss_opaque)
-                loss += loss_opaque * self.C(self.cfg.loss.lambda_opaque_2nd)
+                regu_loss += loss_opaque * self.C(self.cfg.loss.lambda_opaque_2nd)
 
         if (renderer == "1st" and self.C(self.cfg.loss.lambda_z_variance) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_z_variance_2nd) > 0):
             # z variance loss proposed in HiFA: http://arxiv.org/abs/2305.18766
@@ -585,10 +601,10 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             loss_z_variance = out["z_variance"][out["opacity"] > 0.5].mean()
             if renderer == "1st":
                 self.log(f"train/loss_z_variance_{step}", loss_z_variance)
-                loss += loss_z_variance * self.C(self.cfg.loss.lambda_z_variance)
+                regu_loss += loss_z_variance * self.C(self.cfg.loss.lambda_z_variance)
             else:
                 self.log(f"train/loss_z_variance_2nd_{step}", loss_z_variance)
-                loss += loss_z_variance * self.C(self.cfg.loss.lambda_z_variance_2nd)
+                regu_loss += loss_z_variance * self.C(self.cfg.loss.lambda_z_variance_2nd)
 
         # sdf loss
         if (renderer == "1st" and self.C(self.cfg.loss.lambda_eikonal) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_eikonal_2nd) > 0):
@@ -602,10 +618,10 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             
             if renderer == "1st":
                 self.log(f"train/loss_eikonal_{step}", loss_eikonal)
-                loss += loss_eikonal * self.C(self.cfg.loss.lambda_eikonal)
+                regu_loss += loss_eikonal * self.C(self.cfg.loss.lambda_eikonal)
             else:
                 self.log(f"train/loss_eikonal_2nd_{step}", loss_eikonal)
-                loss += loss_eikonal * self.C(self.cfg.loss.lambda_eikonal_2nd)
+                regu_loss += loss_eikonal * self.C(self.cfg.loss.lambda_eikonal_2nd)
 
         # normal consistency loss
         if (renderer == "1st" and self.C(self.cfg.loss.lambda_normal_consistency) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_normal_consistency_2nd) > 0):
@@ -623,10 +639,10 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
             if renderer == "1st":
                 self.log(f"train/loss_normal_consistency_{step}", loss_normal_consistency)
-                loss += loss_normal_consistency * self.C(self.cfg.loss.lambda_normal_consistency)
+                regu_loss += loss_normal_consistency * self.C(self.cfg.loss.lambda_normal_consistency)
             else:
                 self.log(f"train/loss_normal_consistency_2nd_{step}", loss_normal_consistency)
-                loss += loss_normal_consistency * self.C(self.cfg.loss.lambda_normal_consistency_2nd)
+                regu_loss += loss_normal_consistency * self.C(self.cfg.loss.lambda_normal_consistency_2nd)
         
         # laplacian loss
         if (renderer == "1st" and self.C(self.cfg.loss.lambda_laplacian_smoothness) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_laplacian_smoothness_2nd) > 0):
@@ -645,10 +661,10 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             
             if renderer == "1st":
                 self.log(f"train/loss_laplacian_smoothness_{step}", loss_laplacian)
-                loss += loss_laplacian * self.C(self.cfg.loss.lambda_laplacian_smoothness)
+                regu_loss += loss_laplacian * self.C(self.cfg.loss.lambda_laplacian_smoothness)
             else:
                 self.log(f"train/loss_laplacian_smoothness_2nd_{step}", loss_laplacian)
-                loss += loss_laplacian * self.C(self.cfg.loss.lambda_laplacian_smoothness_2nd)
+                regu_loss += loss_laplacian * self.C(self.cfg.loss.lambda_laplacian_smoothness_2nd)
             
         # lambda_normal_smoothness_2d
         if (renderer == "1st" and self.C(self.cfg.loss.lambda_normal_smoothness_2d) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_normal_smoothness_2d_2nd) > 0):
@@ -659,15 +675,15 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             )
             if renderer == "1st":
                 self.log(f"train/loss_normal_smoothness_2d_{step}", loss_normal_smoothness_2d)
-                loss += loss_normal_smoothness_2d * self.C(self.cfg.loss.lambda_normal_smoothness_2d)
+                regu_loss += loss_normal_smoothness_2d * self.C(self.cfg.loss.lambda_normal_smoothness_2d)
             else:
                 self.log(f"train/loss_normal_smoothness_2d_2nd_{step}", loss_normal_smoothness_2d)
-                loss += loss_normal_smoothness_2d * self.C(self.cfg.loss.lambda_normal_smoothness_2d_2nd)
+                regu_loss += loss_normal_smoothness_2d * self.C(self.cfg.loss.lambda_normal_smoothness_2d_2nd)
 
         if "inv_std" in out:
             self.log("train/inv_std", out["inv_std"], prog_bar=True)
 
-        return {"loss": loss}
+        return {"fidelity_loss": fide_loss, "regularization_loss": regu_loss}
 
 
     def _save_image_grid(
