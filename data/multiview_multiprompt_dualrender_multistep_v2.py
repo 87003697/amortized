@@ -527,7 +527,6 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Test(BaseDataset)
             return {
                 "prompt": prompt,
                 "guidance_utils": self.guidance_processor(prompts = prompt),
-                "condition_utils": self.condition_processor(prompts = prompt),
                 "azimuths_deg": azimuth_deg,
                 "elevations_deg": elevation_deg,
                 "distances": camera_distances,
@@ -958,7 +957,7 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
                 self.sup_obj_library = json.load(f)
 
         ##############################################################################################################
-        self.num_workers = 2 #0 # for debugging
+        self.num_workers = 3 #0 # for debugging
         self.pin_memory = False
         self.prefetch_factor = 2 if self.num_workers > 0 else None
 
