@@ -222,7 +222,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         # guidance for the second renderer
         guidance_inp_2nd = out_2nd["comp_rgb"]
 
-        # prepare the prompt utils
+        # collect the guidance
         if "prompt_utils" not in batch:
             batch["prompt_utils"] = batch["guidance_utils"]
 
@@ -284,7 +284,8 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         batch: Dict[str, Any],
     ):
 
-        prompt_utils = batch["prompt_utils"]
+
+        prompt_utils = batch["condition_utils"] if "condition_utils" in batch else batch["prompt_utils"]
         if "prompt_target" in batch:
            raise NotImplementedError
         else:
@@ -369,7 +370,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         for i, (t, batch) in enumerate(zip(timesteps, batch_list)):
 
             # prepare the text embeddings as input
-            prompt_utils = batch["prompt_utils"] if "prompt_utils" in batch else batch["condition_utils"]
+            prompt_utils = batch["condition_utils"] if "condition_utils" in batch else batch["prompt_utils"]
             if "prompt_target" in batch:
                 raise NotImplementedError
             else:
@@ -496,7 +497,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
     def validation_step(self, batch, batch_idx):
 
         # prepare the text embeddings as input
-        prompt_utils = batch["prompt_utils"]
+        prompt_utils = batch["condition_utils"] if "condition_utils" in batch else batch["prompt_utils"]
         if "prompt_target" in batch:
             raise NotImplementedError
         else:
@@ -519,7 +520,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
     def test_step(self, batch, batch_idx):
 
         # prepare the text embeddings as input
-        prompt_utils = batch["prompt_utils"]
+        prompt_utils = batch["condition_utils"] if "condition_utils" in batch else batch["prompt_utils"]
         if "prompt_target" in batch:
             raise NotImplementedError
         else:
