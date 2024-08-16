@@ -78,8 +78,11 @@ class MultiviewMultipromptDualRendererMultiStepDataModuleConfig:
 
     # the following settings are for the preprocessing of the text prompt ############################
     # applied to both supervised and unsupervised data
-    prompt_processor_type: str = ""
-    prompt_processor: dict = field(default_factory=dict)
+    guidance_processor_type: str = ""
+    guidance_processor: dict = field(default_factory=dict)
+
+    condition_processor_type: str = ""
+    condition_processor: dict = field(default_factory=dict)
 
     # the sup / unsup ratio
     sup_unsup_mode: str = "50/50" # "vanilla"
@@ -101,7 +104,8 @@ class BaseDataset(Dataset, Updateable):
             cfg: Any, 
             unsup_prompt_library: List, 
             sup_obj_library: List,
-            prompt_processor = None
+            guidance_processor = None,
+            condition_processor = None
         ) -> None:
         super().__init__()
         self.cfg: MultiviewMultipromptDualRendererMultiStepDataModuleConfig = cfg        
@@ -172,7 +176,8 @@ class BaseDataset(Dataset, Updateable):
 
         ##############################################################################################################
         # the following config is related to the prompt processor
-        self.prompt_processor = prompt_processor
+        self.guidance_processor = guidance_processor
+        self.condition_processor = condition_processor
 
 
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
@@ -198,21 +203,33 @@ class BaseDataset(Dataset, Updateable):
 
     def collate(self, batch) -> Dict[str, Any]:
 
-        # the prompt_utils is a list of prompt_utils, each is a object, 
+        # the guidance_utils is a list of guidance_utils, each is a object, 
         # need to merge them into a single object
-        prompt_util_list = [x.pop("prompt_utils") for x in batch]
-        prompt_utils = prompt_util_list[0]
-        for other_prompt_utils in prompt_util_list[1:]:
-            # merge the attributes in these prompt_utils, sort of hard-coded, apologies
+        guidance_util_list = [x.pop("guidance_utils") for x in batch]
+        guidance_utils = guidance_util_list[0]
+        for other_guidance_utils in guidance_util_list[1:]:
+            # merge the attributes in these guidance_utils, sort of hard-coded, apologies
             # these attributes include global_text_embeddings, local_text_embeddings, text_embeddings_vd
-            prompt_utils.global_text_embeddings.extend(other_prompt_utils.global_text_embeddings)
-            prompt_utils.local_text_embeddings.extend(other_prompt_utils.local_text_embeddings)
-            prompt_utils.text_embeddings_vd.extend(other_prompt_utils.text_embeddings_vd)
+            raise NotImplementedError("The following code is not implemented")
+            guidance_utils.global_text_embeddings.extend(other_guidance_utils.global_text_embeddings)
+            guidance_utils.local_text_embeddings.extend(other_guidance_utils.local_text_embeddings)
+            guidance_utils.text_embeddings_vd.extend(other_guidance_utils.text_embeddings_vd)
+
+        condition_util_list = [x.pop("condition_utils") for x in batch]
+        condition_utils = condition_util_list[0]
+        for other_condition_utils in condition_util_list[1:]:
+            # merge the attributes in these condition_utils, sort of hard-coded, apologies
+            # these attributes include global_text_embeddings, local_text_embeddings, text_embeddings_vd
+            raise NotImplementedError("The following code is not implemented")
+            condition_utils.global_text_embeddings.extend(other_condition_utils.global_text_embeddings)
+            condition_utils.local_text_embeddings.extend(other_condition_utils.local_text_embeddings)
+            condition_utils.text_embeddings_vd.extend(other_condition_utils.text_embeddings)
 
         batch = torch.utils.data.default_collate(batch)
         batch.update(
             {
-                "prompt_utils": prompt_utils,
+                "guidance_utils": guidance_utils,
+                "condition_utils": condition_utils,
             }
         )
         return batch
@@ -452,14 +469,16 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Test(BaseDataset)
             cfg: Any, 
             unsup_prompt_library: List, 
             sup_obj_library: List,
-            prompt_processor = None,
+            guidance_processor = None,
+            condition_processor = None,
             split: str = "val" # "test"
         ) -> None:
         super().__init__(
             cfg, 
             unsup_prompt_library, 
             sup_obj_library,
-            prompt_processor
+            guidance_processor,
+            condition_processor
         )
         self.split = split
 
@@ -507,7 +526,8 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Test(BaseDataset)
             prompt = self.unsup_prompt_library[idx]
             return {
                 "prompt": prompt,
-                "prompt_utils": self.prompt_processor(prompt),
+                "guidance_utils": self.guidance_processor(prompts = prompt),
+                "condition_utils": self.condition_processor(prompts = prompt),
                 "azimuths_deg": azimuth_deg,
                 "elevations_deg": elevation_deg,
                 "distances": camera_distances,
@@ -588,7 +608,8 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Test(BaseDataset)
 
             return {
                 "prompt": prompt,
-                "prompt_utils": self.prompt_processor(prompt),
+                "guidance_utils": self.guidance_processor(prompts = prompt),
+                "condition_utils": self.condition_processor(prompts = prompt),
                 # ground truth images
                 "rgb_imgs": torch.stack(rgb_imgs),
                 "normal_imgs": torch.stack(normal_imgs),
@@ -621,7 +642,6 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Test(BaseDataset)
         batch.update(
             {
                 "index": torch.arange(n_views),
-                # "prompt_utils": self.prompt_processor([x for x in batch["prompt"]]),
                 "noise": torch.randn(real_batch_size, *self.cfg.dim_gaussian).view(-1, *self.cfg.dim_gaussian[1:]) \
                     if not self.cfg.pure_zeros \
                         else torch.zeros(real_batch_size, *self.cfg.dim_gaussian).view(-1, *self.cfg.dim_gaussian[1:]) 
@@ -637,13 +657,15 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
             cfg: Any, 
             unsup_prompt_library: List, 
             sup_obj_library: List,
-            prompt_processor = None
+            guidance_processor = None,
+            condition_processor = None,
         ) -> None:
         super().__init__(
             cfg, 
             unsup_prompt_library, 
             sup_obj_library,
-            prompt_processor
+            guidance_processor,
+            condition_processor
         )
 
         ##############################################################################################################
@@ -771,7 +793,8 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
             ##############################################################################################################
             return {
                 "prompt": prompt,
-                "prompt_utils": self.prompt_processor(prompt),
+                "guidance_utils": self.guidance_processor(prompts = prompt),
+                "condition_utils": self.condition_processor(prompts = prompt),
                 # ground truth images
                 "rgb_imgs": torch.stack(rgb_imgs),
                 "normal_imgs": torch.stack(normal_imgs),
@@ -839,7 +862,8 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
                 return_list.append(
                     {
                         "prompt": prompt,
-                        "prompt_utils": self.prompt_processor(prompt),
+                        "guidance_utils": self.guidance_processor(prompts = prompt),
+                        "condition_utils": self.condition_processor(prompts = prompt),
                         # camera data
                         "azimuths_deg": azimuth_deg,
                         "elevations_deg": elevation_deg,
@@ -900,7 +924,7 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
         return return_list
             
             
-@register("multiview-multiprompt-dualrenderer-multistep-datamodule")
+@register("multiview-multiprompt-dualrenderer-multistep-datamodule-v2")
 class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule):
     cfg: MultiviewMultipromptDualRendererMultiStepDataModuleConfig
 
@@ -939,19 +963,26 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
         self.prefetch_factor = 2 if self.num_workers > 0 else None
 
         # print the info
-        negative_prompt = self.cfg.prompt_processor.negative_prompt
-        negative_prompt_2nd = self.cfg.prompt_processor.negative_prompt_2nd
+        negative_prompt = self.cfg.guidance_processor.negative_prompt
+        negative_prompt_2nd = self.cfg.guidance_processor.negative_prompt_2nd if hasattr(self.cfg.guidance_processor, "negative_prompt_2nd") else None
         info = f"Using prompt library located in [{self.cfg.prompt_library}] and obj dataset in [{self.cfg.obj_library}], \n with egative prompt [{negative_prompt}]"
         if negative_prompt_2nd is not None:
             info += f" and 2nd negative prompt [{negative_prompt_2nd}]"
         threestudio.info(info)  
 
+        negative_prompt = self.cfg.condition_processor.negative_prompt
+        info = f"Using condition processor with negative prompt [{negative_prompt}]"
+        threestudio.info(info)
+
 
     def setup(self, stage: Optional[str] = None) -> None:
 
         # load the prompt processor after the ddp is initialized
-        self.prompt_processor = threestudio.find(self.cfg.prompt_processor_type)(
-            self.cfg.prompt_processor
+        self.guidance_processor = threestudio.find(self.cfg.guidance_processor_type)(
+            self.cfg.guidance_processor
+        )
+        self.condition_processor = threestudio.find(self.cfg.condition_processor_type)(
+            self.cfg.condition_processor
         )
 
         if stage in (None, "fit"):
@@ -962,22 +993,30 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
                 + [obj['caption'] for obj in self.sup_obj_library["train"].values()] \
                 + [obj['caption'] for obj in self.sup_obj_library["val"].values()] \
                 + [obj['caption'] for obj in self.sup_obj_library["test"].values()]
-            self.prompt_processor.prepare_text_embeddings(
+            self.guidance_processor.prepare_text_embeddings(
+                prompt_lists
+            )
+            self.condition_processor.prepare_text_embeddings(
                 prompt_lists
             )
 
+            
             self.train_dataset = MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(
                 self.cfg, 
                 unsup_prompt_library= self.unsup_prompt_library["train"],
                 sup_obj_library=self.sup_obj_library["train"],
-                prompt_processor=self.prompt_processor
+                guidance_processor=self.guidance_processor,
+                condition_processor=self.condition_processor
             )
 
         if stage in (None, "fit", "validate"):
             # prepare the dataset
             prompt_lists = self.unsup_prompt_library["val"] \
                 + [obj['caption'] for obj in self.sup_obj_library["val"].values()]
-            self.prompt_processor.prepare_text_embeddings(
+            self.guidance_processor.prepare_text_embeddings(
+                prompt_lists
+            )
+            self.condition_processor.prepare_text_embeddings(
                 prompt_lists
             )
 
@@ -985,7 +1024,8 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
                 self.cfg, 
                 unsup_prompt_library= self.unsup_prompt_library["val"],
                 sup_obj_library=self.sup_obj_library["val"],
-                prompt_processor=self.prompt_processor,
+                guidance_processor=self.guidance_processor,
+                condition_processor=self.condition_processor,
                 split="val"
             )
 
@@ -997,7 +1037,10 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
             else:
                 prompt_lists = self.unsup_prompt_library["test"] \
                     + [obj['caption'] for obj in self.sup_obj_library["test"].values()]
-            self.prompt_processor.prepare_text_embeddings(
+            self.guidance_processor.prepare_text_embeddings(
+                prompt_lists
+            )
+            self.condition_processor.prepare_text_embeddings(
                 prompt_lists
             )
 
@@ -1005,7 +1048,8 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
                 self.cfg, 
                 unsup_prompt_library= self.unsup_prompt_library["test"],
                 sup_obj_library=self.sup_obj_library["test"],
-                prompt_processor=self.prompt_processor,
+                guidance_processor=self.guidance_processor,
+                condition_processor=self.condition_processor,
                 split="test"
             )
 

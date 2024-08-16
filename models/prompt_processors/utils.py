@@ -7,7 +7,7 @@ def hash_prompt(model: str, prompt: str, type: str) -> str:
     return hashlib.md5(identifier.encode()).hexdigest()
 
 
-def load_from_cache(cache_dir, pretrained_model_name_or_path, prompt, load_local=False, load_global=False, ):
+def load_from_cache_text(cache_dir, pretrained_model_name_or_path, prompt, load_local=False, load_global=False, ):
         # load global text embedding
         if load_global:
             cache_path_global = os.path.join(
@@ -46,13 +46,102 @@ def _load_prompt_embedding(args):
         from cache into memory
     """
     prompt, prompt_vds, cache_dir, pretrained_model_name_or_path = args
-    global_text_embeddings, local_text_embeddings = load_from_cache(
+    global_text_embeddings, local_text_embeddings = load_from_cache_text(
         cache_dir, pretrained_model_name_or_path, prompt, 
         load_global=True, load_local=True
     )
     text_embeddings_vd = torch.stack(
-        [load_from_cache(
+        [load_from_cache_text(
             cache_dir, pretrained_model_name_or_path, prompt, 
             load_global=False, load_local=True) for prompt in prompt_vds], dim=0 # we don't need local text embeddings for view-dipendent conditional generation
     )
     return prompt, global_text_embeddings, local_text_embeddings, text_embeddings_vd
+
+def _load_prompt_embedding_v2(
+        prompt, cache_dir, pretrained_model_name_or_path,
+        load_embed_global=True, load_embed_local=True,
+):
+    """
+        Load the global/local text embeddings for a single prompt
+        from cache into memory
+    """
+    return_dict = {
+        "prompt": prompt,
+    }
+    if load_embed_global:
+        cache_path = os.path.join(
+            cache_dir,
+            f"{hash_prompt(pretrained_model_name_or_path, prompt, 'global')}.pt",
+        )
+        if not os.path.exists(cache_path):
+            raise FileNotFoundError(
+                f"Global Text embedding file {cache_path} for model {pretrained_model_name_or_path} and prompt [{prompt}] not found."
+            )
+        global_text_embedding = torch.load(cache_path, map_location='cpu')
+        return_dict["global_text_embedding"] = global_text_embedding
+
+    if load_embed_local:
+        cache_path = os.path.join(
+            cache_dir,
+            f"{hash_prompt(pretrained_model_name_or_path, prompt, 'local')}.pt",
+        )
+        if not os.path.exists(cache_path):
+            raise FileNotFoundError(
+                f"Local Text embedding file {cache_path} for model {pretrained_model_name_or_path} and prompt [{prompt}] not found."
+            )
+        local_text_embedding = torch.load(cache_path, map_location='cpu')
+        return_dict["local_text_embedding"] = local_text_embedding
+
+    return return_dict
+
+
+def _load_image_embedding(
+        image_path, cache_dir, pretrained_model_name_or_path, 
+        load_latent=True, load_embed_global=True, load_embed_local=False,
+    ):
+    """
+        Load the image encodings for a single image
+        from cache into memory
+    """
+
+    return_dict = {
+        "image_path": image_path,
+    }
+    if load_latent:
+        cache_path = os.path.join(
+            cache_dir,
+            f"{hash_prompt(pretrained_model_name_or_path, image_path, 'latent')}.pt",
+        )
+        if not os.path.exists(cache_path):
+            raise FileNotFoundError(
+                f"Image latent file {cache_path} for model {pretrained_model_name_or_path} and image [{image_path}] not found."
+            )
+        image_latent = torch.load(cache_path, map_location='cpu')
+        return_dict["image_latent"] = image_latent
+
+
+    if load_embed_global:
+        cache_path = os.path.join(
+            cache_dir,
+            f"{hash_prompt(pretrained_model_name_or_path, image_path, 'global')}.pt",
+        )
+        if not os.path.exists(cache_path):
+            raise FileNotFoundError(
+                f"Image embedding file {cache_path} for model {pretrained_model_name_or_path} and image [{image_path}] not found."
+            )
+        image_embedding_global = torch.load(cache_path, map_location='cpu')
+        return_dict["image_embedding_global"] = image_embedding_global
+
+    if load_embed_local:
+        cache_path = os.path.join(
+            cache_dir,
+            f"{hash_prompt(pretrained_model_name_or_path, image_path, 'local')}.pt",
+        )
+        if not os.path.exists(cache_path):
+            raise FileNotFoundError(
+                f"Image embedding file {cache_path} for model {pretrained_model_name_or_path} and image [{image_path}] not found."
+            )
+        image_embedding_local = torch.load(cache_path, map_location='cpu')
+        return_dict["image_embedding_local"] = image_embedding_local
+
+    return return_dict

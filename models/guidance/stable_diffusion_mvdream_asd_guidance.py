@@ -457,7 +457,9 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
         # prepare text embeddings
         text_embeddings = prompt_utils.get_text_embeddings(
-            elevation, azimuth, camera_distances, 
+            elevation=elevation, 
+            azimuth=azimuth, 
+            camera_distances=camera_distances, 
             view_dependent_prompting=self.cfg.mv_view_dependent_prompting,
             use_2nd_uncond = True
         )
@@ -892,7 +894,9 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
         # prepare text embeddings
         if not self.sd_use_perp_neg:
             text_embeddings = prompt_utils.get_text_embeddings(
-                elevation, azimuth, camera_distances, 
+                elevation=elevation, 
+                azimuth=azimuth, 
+                camera_distances=camera_distances, 
                 view_dependent_prompting=self.cfg.sd_view_dependent_prompting,
                 use_2nd_uncond = False
             )
@@ -910,7 +914,9 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             # if dual rendering is enabled, fetch the text embeddings for the 2nd rendering
             if is_dual:
                 text_embeddings_vd_2nd = prompt_utils.get_text_embeddings(
-                    elevation, azimuth_2nd, camera_distances,
+                    elevation=elevation, 
+                    azimuth=azimuth_2nd, 
+                    camera_distances=camera_distances,
                     view_dependent_prompting=self.cfg.sd_view_dependent_prompting,
                     use_2nd_uncond = False
                 )

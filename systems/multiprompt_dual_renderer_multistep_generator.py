@@ -222,6 +222,10 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         # guidance for the second renderer
         guidance_inp_2nd = out_2nd["comp_rgb"]
 
+        # prepare the prompt utils
+        if "prompt_utils" not in batch:
+            batch["prompt_utils"] = batch["guidance_utils"]
+
         if not self.cfg.parallel_guidance:
             # the guidance is computed in two steps
             guidance_out = self.guidance(
@@ -365,7 +369,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         for i, (t, batch) in enumerate(zip(timesteps, batch_list)):
 
             # prepare the text embeddings as input
-            prompt_utils = batch["prompt_utils"]
+            prompt_utils = batch["prompt_utils"] if "prompt_utils" in batch else batch["condition_utils"]
             if "prompt_target" in batch:
                 raise NotImplementedError
             else:
