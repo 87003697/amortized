@@ -216,6 +216,11 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 (self.cfg.num_parts_training - idx - 1) / self.cfg.num_parts_training, # min
                 (self.cfg.num_parts_training - idx) / self.cfg.num_parts_training # max
             ]
+        elif self.cfg.specifiy_guidance_timestep in ["v2"]:
+            timestep_range = [
+                0, # min
+                (self.cfg.num_parts_training - idx) / self.cfg.num_parts_training # max
+            ]
         else:
             raise NotImplementedError
 
