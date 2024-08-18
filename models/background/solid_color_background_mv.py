@@ -11,7 +11,7 @@ from threestudio.utils.typing import *
 
 
 @threestudio.register("solid-color-background-mv")
-class SolidColorBackground(BaseBackground):
+class SolidColorBackgroundMV(BaseBackground):
     @dataclass
     class Config(BaseBackground.Config):
         n_output_dims: int = 3
