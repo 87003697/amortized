@@ -63,6 +63,9 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
         # for chunking in training
         train_chunk_size: int = 0
 
+        # for compatability with RichDreamer
+        depth_norm_radius: float = 1.0
+
     cfg: Config
 
     def configure(
@@ -195,6 +198,8 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
         noise: Optional[Float[Tensor, "B C"]] = None,
         space_cache: Optional[Float[Tensor, "B ..."]] = None,
         text_embed: Optional[Float[Tensor, "B C"]] = None,
+        camera_distances: Optional[Float[Tensor, "B"]] = None,
+        c2w: Optional[Float[Tensor, "B 4 4"]] = None,
         **kwargs
     ) -> Dict[str, Float[Tensor, "..."]]:
         # reshape position and direction
@@ -412,6 +417,7 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
 
         comp_rgb = comp_rgb_fg + bg_color * (1.0 - opacity)
 
+
         out = {
             "comp_rgb": comp_rgb.view(batch_size, height, width, -1),
             "comp_rgb_fg": comp_rgb_fg.view(batch_size, height, width, -1),
@@ -421,13 +427,20 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
             "z_variance": z_variance.view(batch_size, height, width, 1),
         }
 
-        # # just for debugging, can be removed # TODO
-        # stat = self.geometry.generate_space_cache(
-        #     styles = noise,
-        #     text_embed = text_embed,
-        #     report_stats = True,
-        # )
-        # out.update(stat)
+        # the following are from richdreamer #########
+        radius = self.cfg.depth_norm_radius
+
+        far= camera_distances.reshape(-1, 1, 1, 1) + radius * torch.sqrt(3 * torch.ones(1, 1, 1, 1, device=camera_distances.device))
+        near = camera_distances.reshape(-1, 1, 1, 1) - radius * torch.sqrt(3 * torch.ones(1, 1, 1, 1, device=camera_distances.device))
+        depth_tmp = out["depth"] * out["opacity"] + (1.0 - out["opacity"]) * far
+        depth_norm = (far - depth_tmp) / (far - near)
+        depth_norm = torch.clamp(depth_norm, 0.0, 1.0)
+        out.update(
+            {
+                "disparity": depth_norm.view(batch_size, height, width, 1),
+            }
+        )
+        #############################################
 
         # compute normal is also used in training
         if "normal" in geo_out:
@@ -439,13 +452,35 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
             )
 
             comp_normal = F.normalize(comp_normal, dim=-1)
-            comp_normal = torch.lerp(
-                torch.zeros_like(comp_normal), (comp_normal.detach() + 1.0) / 2.0, opacity
+            comp_normal_mask = torch.lerp(
+                torch.zeros_like(comp_normal), (comp_normal + 1.0) / 2.0, opacity
             )
+
+            # for compatibility with RichDreamer #############
+            bg_normal = 0.5 * torch.ones_like(comp_normal)
+            bg_normal[:, 2] = 1.0 # for a blue background
+            bg_normal_white = torch.ones_like(comp_normal)
+
+            # comp_normal_vis = (comp_normal + 1.0) / 2.0 * opacity + (1 - opacity) * bg_normal
+
+            # convert_normal_to_cam_space
+            w2c: Float[Tensor, "B 4 4"] = torch.inverse(c2w)
+            rot: Float[Tensor, "B 3 3"] = w2c[:, :3, :3]
+            comp_normal_cam = comp_normal.view(batch_size, -1, 3) @ rot.permute(0, 2, 1)
+            flip_x = torch.eye(3, device=comp_normal_cam.device) #  pixel space flip axis so we need built negative y-axis normal
+            flip_x[0, 0] = -1
+            comp_normal_cam = comp_normal_cam @ flip_x[None, :, :]
+            comp_normal_cam = comp_normal_cam.view(-1, 3) # reshape back to (Nr, 3)
+
+            comp_normal_cam_vis = (comp_normal_cam + 1.0) / 2.0 * opacity + (1 - opacity) * bg_normal
+            comp_normal_cam_vis_white = (comp_normal_cam + 1.0) / 2.0 * opacity + (1 - opacity) * bg_normal_white
 
             out.update(
                 {
-                    "comp_normal": comp_normal.view(batch_size, height, width, 3),
+                    "comp_normal": comp_normal_mask.view(batch_size, height, width, 3),
+                    # "comp_normal_vis": comp_normal_vis.view(batch_size, height, width, 3),
+                    "comp_normal_cam_vis": comp_normal_cam_vis.view(batch_size, height, width, 3),
+                    "comp_normal_cam_vis_white": comp_normal_cam_vis_white.view(batch_size, height, width, 3),
                 }
             )
 

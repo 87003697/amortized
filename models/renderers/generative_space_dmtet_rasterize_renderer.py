@@ -22,6 +22,15 @@ from threestudio.models.mesh import Mesh
 
 from threestudio.utils.ops import scale_tensor as scale_tensor
 
+def c2wtow2c(c2w):
+    """transfer camera2world to world2camera matrix"""
+
+    w2c: Float[Tensor, "B 4 4"] = torch.zeros(c2w.shape[0], 4, 4).to(c2w)
+    w2c[:, :3, :3] = c2w[:, :3, :3].permute(0, 2, 1)
+    w2c[:, :3, 3:] = -c2w[:, :3, :3].permute(0, 2, 1) @ c2w[:, :3, 3:]
+    w2c[:, 3, 3] = 1.0
+
+    return w2c
 
 @threestudio.register("generative-space-dmtet-rasterize-renderer")
 class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
@@ -79,6 +88,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         text_embed: Optional[Float[Tensor, "B C"]] = None,
         render_rgb: bool = True,
         rays_d_rasterize: Optional[Float[Tensor, "B H W 3"]] = None,
+        c2w: Optional[Float[Tensor, "B 4 4"]] = None,
         **kwargs
     ) -> Dict[str, Float[Tensor, "..."]]:
 
@@ -138,6 +148,52 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 gb_normal_aa, rast, v_pos_clip, mesh.t_pos_idx
             )
             out.update({"comp_normal": gb_normal_aa})  # in [0, 1]
+
+            # for compatibility with RichDreamer #############
+            # camera_batch_v_nrm = torch.repeat_interleave(mesh.v_nrm[None, ...], num_views_per_batch, dim=0)
+            bg_normal = 0.5 * torch.ones_like(gb_normal)
+            bg_normal[..., 2] = 1.0
+            bg_normal_white = torch.ones_like(gb_normal)
+
+            # convert_normal_to_cam_space
+            w2c: Float[Tensor, "B 4 4"] = torch.inverse(c2w)
+            rotate: Float[Tensor, "B 3 3"] = w2c[:, :3, :3]
+            # camera_batch_v_nrm = camera_batch_v_nrm @ rotate.permute(0, 2, 1)
+            # gb_normal: B H W 3 -> B H W 1 3; rotate: B 3 3 -> B 1 1 3 3
+            gb_normal_cam = gb_normal[..., None, :] @ rotate.permute(0, 2, 1)[..., None, None, :, :]
+            flip_x = torch.eye(3).to(w2c) # pixel space flip axis so we need built negative y-axis normal
+            flip_x[0, 0] = -1
+            # camera_batch_v_nrm = camera_batch_v_nrm @ flip_x[None, ...]
+            # flip_x: B 3 3 -> B 1 1 3 3
+            gb_normal_cam = gb_normal_cam @ flip_x[None, None, None, ...]
+            gb_normal_cam = gb_normal_cam.squeeze(-2)
+            gb_normal_cam = F.normalize(gb_normal_cam, dim=-1)
+            gb_normal_cam = (gb_normal_cam + 1.0) / 2.0
+
+            # camera_gb_normal, _ = self.ctx.interpolate(camera_batch_v_nrm, rast, mesh.t_pos_idx)
+            # camera_gb_normal = F.normalize(camera_gb_normal, dim=-1)
+            # camera_gb_normal = (camera_gb_normal + 1.0) / 2.0
+
+            # render with bg_normal
+            camera_gb_normal_bg = torch.lerp(
+                bg_normal, gb_normal_cam, mask.float()
+            )
+            camera_gb_normal_bg = self.ctx.antialias(
+                camera_gb_normal_bg, rast, v_pos_clip, mesh.t_pos_idx
+            )
+
+            # render with bg_normal_white
+            camera_gb_normal_bg_white = torch.lerp(
+                bg_normal_white, gb_normal_cam, mask.float()
+            )
+            camera_gb_normal_bg_white = self.ctx.antialias(
+                camera_gb_normal_bg_white, rast, v_pos_clip, mesh.t_pos_idx
+            )
+
+            out.update({
+                "comp_normal_cam_vis": camera_gb_normal_bg,
+                "comp_normal_cam_vis_white": camera_gb_normal_bg_white,
+            })
 
             if render_rgb:
 
