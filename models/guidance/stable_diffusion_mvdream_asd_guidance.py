@@ -214,8 +214,8 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 except:
                     raise ValueError(f"Invalid sqrt bias: {self.cfg.plus_schedule}")
                 
-            t_plus = plus_ratio * torch.sqrt(t - self.min_step + bias)
-        
+            # t_plus = plus_ratio * torch.sqrt(t - self.min_step + bias)
+            t_plus = plus_ratio * torch.sqrt(t + bias)
         else:
             raise ValueError(f"Invalid plus_schedule: {self.cfg.plus_schedule}")
 
