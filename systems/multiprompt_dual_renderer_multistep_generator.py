@@ -32,27 +32,36 @@ def sample_timesteps(
     # separate the timestep into num_parts_training parts
     timesteps = []
 
-    if split_parts in [None, "v1"]:
-        for i in range(num_parts):
-            length_timestep = len(all_timesteps) // num_parts
-            timestep = all_timesteps[
-                i * length_timestep : (i + 1) * length_timestep
-            ]
-            # sample only one from the timestep
-            idx = torch.randint(0, len(timestep), (batch_size,))
-            timesteps.append(timestep[idx])
-    elif split_parts == "v2":
-        for i in range(num_parts):
-            if i == 0: # always start from the beginning
-                timestep = all_timesteps[:1]
-            else:
-                length_timestep = len(all_timesteps) // (num_parts - 1)
-                timestep = all_timesteps[
-                    (i - 1) * length_timestep : i * length_timestep
-                ]
-            # sample only one from the timestep
-            idx = torch.randint(0, len(timestep), (batch_size,))
-            timesteps.append(timestep[idx])
+    for i in range(num_parts):
+        length_timestep = len(all_timesteps) // num_parts
+        timestep = all_timesteps[
+            i * length_timestep : (i + 1) * length_timestep
+        ]
+        # sample only one from the timestep
+        idx = torch.randint(0, len(timestep), (batch_size,))
+        timesteps.append(timestep[idx])
+
+    # if split_parts in [None, "v1"]:
+    #     for i in range(num_parts):
+    #         length_timestep = len(all_timesteps) // num_parts
+    #         timestep = all_timesteps[
+    #             i * length_timestep : (i + 1) * length_timestep
+    #         ]
+    #         # sample only one from the timestep
+    #         idx = torch.randint(0, len(timestep), (batch_size,))
+    #         timesteps.append(timestep[idx])
+    # elif split_parts == "v2":
+    #     for i in range(num_parts):
+    #         if i == 0: # always start from the beginning
+    #             timestep = all_timesteps[:1]
+    #         else:
+    #             length_timestep = len(all_timesteps) // (num_parts - 1)
+    #             timestep = all_timesteps[
+    #                 (i - 1) * length_timestep : i * length_timestep
+    #             ]
+    #         # sample only one from the timestep
+    #         idx = torch.randint(0, len(timestep), (batch_size,))
+    #         timesteps.append(timestep[idx])
     return timesteps
 
 @threestudio.register("multiprompt-dual-renderer-multistep-generator-system")
