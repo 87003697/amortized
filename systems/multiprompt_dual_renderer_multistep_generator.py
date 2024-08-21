@@ -483,6 +483,9 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                     weight_fide = 1.0 / self.cfg.num_parts_training
                     # follow SDS
                     weight_regu = (sigma**2).mean()
+                elif self.cfg.loss.weighting_strategy in ["v4"]:
+                    weight_fide = (sigma / alpha).mean()
+                    weight_regu = (sigma / alpha).mean()
                 else:
                     raise NotImplementedError
             else:
@@ -737,7 +740,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 [
                     {
                         "type": "rgb",
-                        "img": out["comp_normal"][batch_idx],
+                        "img": out["comp_normal_cam_vis"][batch_idx] if "comp_normal_cam_vis" in out else out["comp_normal"][batch_idx],
                         "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
                     }
                 ]
