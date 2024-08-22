@@ -22,6 +22,8 @@ from diffusers import (
     DDIMScheduler,
 )
 
+from threestudio.utils.ops import  CustomMultiply
+
 def sample_timesteps(
     all_timesteps: List,
     num_parts: int,
@@ -106,6 +108,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         noise_scheduler: str = "ddim"
 
         specifiy_guidance_timestep: Optional[str] = None # any of None, v1;  control the guidance timestep
+        gradient_calibration: Optional[str] = None # any of None, "v1", "v2"
 
     cfg: Config
 
@@ -457,9 +460,15 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             )
             alpha = (alphas[t] ** 0.5).view(-1, 1, 1, 1).to(self.device)
             sigma = ((1 - alphas[t]) ** 0.5).view(-1, 1, 1, 1).to(self.device)
-            denoised_latents = (
-                noisy_latent - sigma * noise_pred
-            ) / alpha
+
+            if self.cfg.gradient_calibration in [None]:
+                denoised_latents = (noisy_latent - sigma * noise_pred) / alpha
+            elif self.cfg.gradient_calibration in ["v1"]:
+                denoised_latents = noisy_latent / alpha - CustomMultiply.apply(sigma / alpha, noise_pred)
+            elif self.cfg.gradient_calibration in ["v2"]:
+                denoised_latents = noisy_latent / alpha + CustomMultiply.apply(- sigma / alpha, noise_pred)
+            else:
+                raise NotImplementedError
 
             # decode the latent to 3D representation
             batch["space_cache"] = self.geometry.decode(
