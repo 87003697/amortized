@@ -22,15 +22,12 @@ from diffusers import (
     DDIMScheduler,
 )
 
-from threestudio.utils.ops import  CustomMultiply
 
 def sample_timesteps(
     all_timesteps: List,
     num_parts: int,
     batch_size: int = 1,
-    split_parts: Optional[str] = None,
 ):
-    assert split_parts in [None, "v1", "v2"]
     # separate the timestep into num_parts_training parts
     timesteps = []
 
@@ -43,27 +40,6 @@ def sample_timesteps(
         idx = torch.randint(0, len(timestep), (batch_size,))
         timesteps.append(timestep[idx])
 
-    # if split_parts in [None, "v1"]:
-    #     for i in range(num_parts):
-    #         length_timestep = len(all_timesteps) // num_parts
-    #         timestep = all_timesteps[
-    #             i * length_timestep : (i + 1) * length_timestep
-    #         ]
-    #         # sample only one from the timestep
-    #         idx = torch.randint(0, len(timestep), (batch_size,))
-    #         timesteps.append(timestep[idx])
-    # elif split_parts == "v2":
-    #     for i in range(num_parts):
-    #         if i == 0: # always start from the beginning
-    #             timestep = all_timesteps[:1]
-    #         else:
-    #             length_timestep = len(all_timesteps) // (num_parts - 1)
-    #             timestep = all_timesteps[
-    #                 (i - 1) * length_timestep : i * length_timestep
-    #             ]
-    #         # sample only one from the timestep
-    #         idx = torch.randint(0, len(timestep), (batch_size,))
-    #         timesteps.append(timestep[idx])
     return timesteps
 
 @threestudio.register("multiprompt-dual-renderer-multistep-generator-system")
@@ -96,19 +72,17 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         # the followings are related to the multi-step diffusion
         noise_addition: str = "gaussian" # any of "gaussian", "zero", "pred"
         num_parts_training: int = 4
-        split_parts: Optional[str] = None # any of None, "v1", "v2"
 
         num_steps_training: int = 50
         num_steps_sampling: int = 50
 
-        classifier_guidance_scale_training: float = 1.0
-        classifier_guidance_scale_sampling: float = 1.0
         
         sample_scheduler: str = "ddpm" #any of "ddpm", "ddim"
         noise_scheduler: str = "ddim"
 
         specifiy_guidance_timestep: Optional[str] = None # any of None, v1;  control the guidance timestep
-        gradient_calibration: Optional[str] = None # any of None, "v1", "v2"
+
+        predition_type: str = "epsilon" # any of "epsilon", "sample"
 
     cfg: Config
 
@@ -140,21 +114,26 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
     def _configure_scheduler(self, scheduler: str):
         assert scheduler in ["ddpm", "ddim", "dpm"]
+        assert self.cfg.predition_type in ["epsilon", "sample"]
         if scheduler == "ddpm":
-            return DDPMScheduler.from_pretrained(
+            scheduler_returned = DDPMScheduler.from_pretrained(
                 self.cfg.scheduler_dir,
                 subfolder="scheduler",
+                prediction_type=self.cfg.predition_type,
             )
         elif scheduler == "ddim":
-            return DDIMScheduler.from_pretrained(
+            scheduler_returned = DDIMScheduler.from_pretrained(
                 self.cfg.scheduler_dir,
                 subfolder="scheduler",
+                prediction_type=self.cfg.predition_type,
             )
         elif scheduler == "dpm":
-            return DPMSolverMultistepScheduler.from_pretrained(
+            scheduler_returned = DPMSolverMultistepScheduler.from_pretrained(
                 self.cfg.scheduler_dir,
                 subfolder="scheduler",
+                prediction_type=self.cfg.predition_type,
             )
+        return scheduler_returned
 
 
     def on_fit_start(self) -> None:
@@ -283,16 +262,10 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         scheduler,
         num_steps: int,
     ):
-        if self.cfg.split_parts in [None, "v1"]:
-            scheduler.set_timesteps(num_steps)
-            timesteps = scheduler.timesteps
-        elif self.cfg.split_parts in ["v2"]:
-            scheduler.set_timesteps(num_steps)
-            timesteps_orig = scheduler.timesteps
-            timesteps_delta = scheduler.config.num_train_timesteps - 1 - timesteps_orig.max() 
-            timesteps = timesteps_orig + timesteps_delta
-        else:
-            raise NotImplementedError
+        scheduler.set_timesteps(num_steps)
+        timesteps_orig = scheduler.timesteps
+        timesteps_delta = scheduler.config.num_train_timesteps - 1 - timesteps_orig.max() 
+        timesteps = timesteps_orig + timesteps_delta
         return timesteps
 
 
@@ -334,20 +307,21 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             )
             noisy_latent_input = torch.cat([noisy_latent_input] * 2, dim=0)
 
-            # predict the noise added
-            noise_pred = self.geometry.denoise(
-                noisy_input = noisy_latent_input,
-                text_embed = text_embed, # TODO: text_embed might be null
-                timestep = t.to(self.device),
-            )
-
-            noise_pred_cond, noise_pred_uncond = noise_pred.chunk(2)
-            noise_pred = noise_pred_uncond + self.cfg.classifier_guidance_scale_sampling * (
-                noise_pred_cond - noise_pred_uncond
-            )
-
-            latents = self.sample_scheduler.step(noise_pred, t, latents).prev_sample
-
+            if self.cfg.predition_type in ["epsilon"]:
+                # predict the noise added
+                noise_pred = self.geometry.denoise(
+                    noisy_input = noisy_latent_input,
+                    text_embed = text_embed, # TODO: text_embed might be null
+                    timestep = t.to(self.device),
+                )
+                latents = self.sample_scheduler.step(noise_pred, t, latents).prev_sample
+            elif self.cfg.predition_type in ["sample"]:
+                denoised_latents = self.geometry.denoise(
+                    noisy_input = noisy_latent_input,
+                    text_embed = text_embed, # TODO: text_embed might be null
+                    timestep = t.to(self.device),
+                )
+                latents = self.sample_scheduler.step(denoised_latents, t, latents).prev_sample
 
         # decode the latent to 3D representation
         space_cache = self.geometry.decode(
@@ -377,7 +351,6 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             all_timesteps,
             num_parts = self.cfg.num_parts_training, 
             batch_size=1, #batch_size,
-            split_parts=self.cfg.split_parts,
         )
 
         # zero the gradients
@@ -413,60 +386,35 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             )
  
 
-            if self.cfg.classifier_guidance_scale_training == 1.0:
-                # prepare the text embeddings as input
-                text_embed = cond
-                # under 10% of the time, the text embed is set to None
-                if torch.rand(1) < 0.1:
-                    text_embed = uncond
+            # prepare the text embeddings as input
+            text_embed = cond
+            # if torch.rand(1) < 0: 
+            #     text_embed = uncond
 
-                # predict the noise added
-                noise_pred = self.geometry.denoise(
-                    noisy_input = noisy_latent,
-                    text_embed = text_embed, # TODO: text_embed might be null
-                    timestep = t.to(self.device),
-                )
-            else: # perform the classifier guidance at the training time
-                # prepare the input
-                text_embed = torch.cat(
-                    [
-                        cond,
-                        uncond,
-                    ],
-                    dim=0,
-                )
-
-                noisy_latent_input = torch.cat([noisy_latent] * 2, dim=0)
-
-                # currently do not support set different timesteps among batch
-                # t = t.repeat_interleave(2) 
-
-                # predict the noise added
-                noise_pred = self.geometry.denoise(
-                    noisy_input = noisy_latent_input,
-                    text_embed = text_embed, # TODO: text_embed might be null
-                    timestep = t.to(self.device),
-                )
-
-                # perform the classifier guidance
-                noise_pred_cond, noise_pred_uncond = noise_pred.chunk(2)
-                noise_pred = noise_pred_uncond + self.cfg.classifier_guidance_scale_training * (
-                    noise_pred_cond - noise_pred_uncond
-                )
-
-            # convert epsilon into x0
+            # necessary coefficients
             alphas: Float[Tensor, "..."] = self.noise_scheduler.alphas_cumprod.to(
                 self.device
             )
             alpha = (alphas[t] ** 0.5).view(-1, 1, 1, 1).to(self.device)
             sigma = ((1 - alphas[t]) ** 0.5).view(-1, 1, 1, 1).to(self.device)
 
-            if self.cfg.gradient_calibration in [None]:
+
+            # predict the noise added
+            if self.cfg.predition_type in ["epsilon"]:
+                noise_pred = self.geometry.denoise(
+                    noisy_input = noisy_latent,
+                    text_embed = text_embed, # TODO: text_embed might be null
+                    timestep = t.to(self.device),
+                )
+
+                # convert epsilon into x0
                 denoised_latents = (noisy_latent - sigma * noise_pred) / alpha
-            elif self.cfg.gradient_calibration in ["v1"]:
-                denoised_latents = noisy_latent / alpha - CustomMultiply.apply(sigma / alpha, noise_pred)
-            elif self.cfg.gradient_calibration in ["v2"]:
-                denoised_latents = noisy_latent / alpha + CustomMultiply.apply(- sigma / alpha, noise_pred)
+            elif self.cfg.predition_type in ["sample"]:
+                denoised_latents = self.geometry.denoise(
+                    noisy_input = noisy_latent,
+                    text_embed = text_embed, # TODO: text_embed might be null
+                    timestep = t.to(self.device),
+                )
             else:
                 raise NotImplementedError
 
