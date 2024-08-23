@@ -283,13 +283,16 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             text_embed_cond = prompt_utils.get_global_text_embeddings()
             text_embed_uncond = prompt_utils.get_uncond_text_embeddings()
         
-        text_embed = torch.cat(
-            [
-                text_embed_cond,
-                text_embed_uncond,
-            ],
-            dim=0,
-        )
+        if None:
+            text_embed = torch.cat(
+                [
+                    text_embed_cond,
+                    text_embed_uncond,
+                ],
+                dim=0,
+            )
+        else:
+            text_embed = text_embed_cond
 
         timesteps = self._set_timesteps(
             self.sample_scheduler,
@@ -305,7 +308,9 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 latents, 
                 t
             )
-            noisy_latent_input = torch.cat([noisy_latent_input] * 2, dim=0)
+
+            if None:
+                noisy_latent_input = torch.cat([noisy_latent_input] * 2, dim=0)
 
             if self.cfg.predition_type in ["epsilon"]:
                 # predict the noise added
@@ -322,6 +327,8 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                     timestep = t.to(self.device),
                 )
                 latents = self.sample_scheduler.step(denoised_latents, t, latents).prev_sample
+            else:
+                raise NotImplementedError
 
         # decode the latent to 3D representation
         space_cache = self.geometry.decode(
@@ -706,7 +713,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 [
                     {
                         "type": "rgb",
-                        "img": out["comp_normal_cam_vis"][batch_idx] if "comp_normal_cam_vis" in out else out["comp_normal"][batch_idx],
+                        "img": out["comp_normal_cam_vis_white"][batch_idx] if "comp_normal_cam_vis_white" in out else out["comp_normal"][batch_idx],
                         "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
                     }
                 ]
