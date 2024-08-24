@@ -114,7 +114,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
     def _configure_scheduler(self, scheduler: str):
         assert scheduler in ["ddpm", "ddim", "dpm"]
-        assert self.cfg.predition_type in ["epsilon", "sample", "sample_delta"]
+        assert self.cfg.predition_type in ["epsilon", "sample", "sample_delta", "sample_delta_v2"]
         
         # define the prediction type
         predition_type = self.cfg.predition_type
@@ -326,7 +326,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                     timestep = t.to(self.device),
                 )
                 latents = self.sample_scheduler.step(noise_pred, t, latents).prev_sample
-            elif self.cfg.predition_type in ["sample", "sample_delta"]:
+            elif self.cfg.predition_type in ["sample", "sample_delta", "sample_delta_v2"]:
                 output = self.geometry.denoise(
                     noisy_input = noisy_latent_input,
                     text_embed = text_embed, # TODO: text_embed might be null
@@ -335,7 +335,10 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 if self.cfg.predition_type in ["sample"]:
                     denoised_latents = output
                 elif self.cfg.predition_type in ["sample_delta"]:
-                    denoised_latents = latents + output
+                    denoised_latents = noisy_latent_input + output
+                elif self.cfg.predition_type in ["sample_delta_v2"]:
+                    denoised_latents = noisy_latent_input - output
+
                 latents = self.sample_scheduler.step(denoised_latents, t, latents).prev_sample
             else:
                 raise NotImplementedError
@@ -426,7 +429,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
                 # convert epsilon into x0
                 denoised_latents = (noisy_latent - sigma * noise_pred) / alpha
-            elif self.cfg.predition_type in ["sample", "sample_delta"]:
+            elif self.cfg.predition_type in ["sample", "sample_delta", "sample_delta_v2"]:
                 output = self.geometry.denoise(
                     noisy_input = noisy_latent,
                     text_embed = text_embed, # TODO: text_embed might be null
@@ -436,6 +439,8 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                     denoised_latents = output
                 elif self.cfg.predition_type in ["sample_delta"]:
                     denoised_latents = noisy_latent + output
+                elif self.cfg.predition_type in ["sample_delta_v2"]:
+                    denoised_latents = noisy_latent - output
             else:
                 raise NotImplementedError
 
