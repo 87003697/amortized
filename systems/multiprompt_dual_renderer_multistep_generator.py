@@ -114,24 +114,30 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
     def _configure_scheduler(self, scheduler: str):
         assert scheduler in ["ddpm", "ddim", "dpm"]
-        assert self.cfg.predition_type in ["epsilon", "sample"]
+        assert self.cfg.predition_type in ["epsilon", "sample", "sample_delta"]
+        
+        # define the prediction type
+        predition_type = self.cfg.predition_type
+        if "sample" in predition_type: # special case for variance such as sample_delta
+            predition_type = "sample"
+
         if scheduler == "ddpm":
             scheduler_returned = DDPMScheduler.from_pretrained(
                 self.cfg.scheduler_dir,
                 subfolder="scheduler",
-                prediction_type=self.cfg.predition_type,
+                prediction_type=predition_type,
             )
         elif scheduler == "ddim":
             scheduler_returned = DDIMScheduler.from_pretrained(
                 self.cfg.scheduler_dir,
                 subfolder="scheduler",
-                prediction_type=self.cfg.predition_type,
+                prediction_type=predition_type,
             )
         elif scheduler == "dpm":
             scheduler_returned = DPMSolverMultistepScheduler.from_pretrained(
                 self.cfg.scheduler_dir,
                 subfolder="scheduler",
-                prediction_type=self.cfg.predition_type,
+                prediction_type=predition_type,
             )
         return scheduler_returned
 
@@ -320,12 +326,16 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                     timestep = t.to(self.device),
                 )
                 latents = self.sample_scheduler.step(noise_pred, t, latents).prev_sample
-            elif self.cfg.predition_type in ["sample"]:
-                denoised_latents = self.geometry.denoise(
+            elif self.cfg.predition_type in ["sample", "sample_delta"]:
+                output = self.geometry.denoise(
                     noisy_input = noisy_latent_input,
                     text_embed = text_embed, # TODO: text_embed might be null
                     timestep = t.to(self.device),
                 )
+                if self.cfg.predition_type in ["sample"]:
+                    denoised_latents = output
+                elif self.cfg.predition_type in ["sample_delta"]:
+                    denoised_latents = latents + output
                 latents = self.sample_scheduler.step(denoised_latents, t, latents).prev_sample
             else:
                 raise NotImplementedError
@@ -416,12 +426,16 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
                 # convert epsilon into x0
                 denoised_latents = (noisy_latent - sigma * noise_pred) / alpha
-            elif self.cfg.predition_type in ["sample"]:
-                denoised_latents = self.geometry.denoise(
+            elif self.cfg.predition_type in ["sample", "sample_delta"]:
+                output = self.geometry.denoise(
                     noisy_input = noisy_latent,
                     text_embed = text_embed, # TODO: text_embed might be null
                     timestep = t.to(self.device),
                 )
+                if self.cfg.predition_type in ["sample"]:
+                    denoised_latents = output
+                elif self.cfg.predition_type in ["sample_delta"]:
+                    denoised_latents = noisy_latent + output
             else:
                 raise NotImplementedError
 
@@ -731,7 +745,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 [
                     {
                         "type": "grayscale",
-                        "img": normalize(out["depth"][batch_idx, :, :, 0]),
+                        "img": out['disparity'][batch_idx, :, :, 0] if 'disparity' in out else normalize(out["depth"][batch_idx, :, :, 0]),
                         "kwargs": {"cmap": None, "data_range": (0, 1)},
                     },
                 ]

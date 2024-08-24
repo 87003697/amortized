@@ -63,8 +63,6 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
         # for chunking in training
         train_chunk_size: int = 0
 
-        # for compatability with RichDreamer
-        depth_norm_radius: float = 1.0
 
     cfg: Config
 
@@ -428,16 +426,15 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
         }
 
         # the following are from richdreamer #########
-        radius = self.cfg.depth_norm_radius
 
-        far= camera_distances.reshape(-1, 1, 1, 1) + radius * torch.sqrt(3 * torch.ones(1, 1, 1, 1, device=camera_distances.device))
-        near = camera_distances.reshape(-1, 1, 1, 1) - radius * torch.sqrt(3 * torch.ones(1, 1, 1, 1, device=camera_distances.device))
-        depth_tmp = out["depth"] * out["opacity"] + (1.0 - out["opacity"]) * far
-        depth_norm = (far - depth_tmp) / (far - near)
-        depth_norm = torch.clamp(depth_norm, 0.0, 1.0)
+        far= camera_distances.reshape(-1, 1, 1, 1) + torch.sqrt(3 * torch.ones(1, 1, 1, 1, device=camera_distances.device))
+        near = camera_distances.reshape(-1, 1, 1, 1) - torch.sqrt(3 * torch.ones(1, 1, 1, 1, device=camera_distances.device))
+        disparity_tmp = out["depth"] * out["opacity"] + (1.0 - out["opacity"]) * far
+        disparity_norm = (far - disparity_tmp) / (far - near)
+        disparity_norm = torch.clamp(disparity_norm, 0.0, 1.0)
         out.update(
             {
-                "disparity": depth_norm.view(batch_size, height, width, 1),
+                "disparity": disparity_norm.view(batch_size, height, width, 1),
             }
         )
         #############################################

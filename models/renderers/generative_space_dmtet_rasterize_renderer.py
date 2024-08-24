@@ -47,7 +47,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         isosurface_method: str = "mt" # "mt" or "mc-cpu"
 
         enable_bg_rays: bool = False
-        
+        near_distance: float = 1.732
 
     cfg: Config
 
@@ -88,6 +88,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         text_embed: Optional[Float[Tensor, "B C"]] = None,
         render_rgb: bool = True,
         rays_d_rasterize: Optional[Float[Tensor, "B H W 3"]] = None,
+        camera_distances: Optional[Float[Tensor, "B"]] = None,
         c2w: Optional[Float[Tensor, "B 4 4"]] = None,
         **kwargs
     ) -> Dict[str, Float[Tensor, "..."]]:
@@ -137,7 +138,17 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 mask[:1] = True
 
             mask_aa = self.ctx.antialias(mask.float(), rast, v_pos_clip, mesh.t_pos_idx)
-            out = {"opacity": mask_aa, "mesh": mesh, "depth": depth}
+
+            # disparity, as required by RichDreamer
+            far= camera_distances + torch.sqrt(3 * torch.ones(1, device=camera_distances.device))
+            near = camera_distances - torch.sqrt(3 * torch.ones(1, device=camera_distances.device))
+            disparity_tmp = depth.clamp_max(far)
+            disparity_norm = (far - disparity_tmp) / (far - near)
+            disparity_norm = disparity_norm.clamp(0, 1)
+            disparity_norm = torch.lerp(torch.zeros_like(depth), disparity_norm, mask.float())
+            disparity_norm = self.ctx.antialias(disparity_norm, rast, v_pos_clip, mesh.t_pos_idx)
+
+            out = {"opacity": mask_aa, "mesh": mesh, "depth": depth, "disparity": disparity_norm}
 
             gb_normal, _ = self.ctx.interpolate_one(mesh.v_nrm, rast, mesh.t_pos_idx)
             gb_normal = F.normalize(gb_normal, dim=-1)
