@@ -241,6 +241,7 @@ class BaseDataset(Dataset, Updateable):
         # in MV-Dream, the camera distance is relative and related to the focal length
         # the following is the default setting, 
         # however, the relative camera distance is not used in supervised training
+        camera_distances_relative = camera_distances
         if relative_radius:
             scale = 1 / torch.tan(0.5 * fovy)
             camera_distances = scale * camera_distances
@@ -321,6 +322,7 @@ class BaseDataset(Dataset, Updateable):
             "elevation": elevation_deg,
             "azimuth": azimuth_deg,
             "camera_distances": camera_distances,
+            "camera_distances_relative": camera_distances_relative,
             "height": self.height,
             "width": self.width,
             "fovy": fovy_deg,

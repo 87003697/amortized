@@ -518,14 +518,7 @@ class SDMVAsynchronousScoreDistillationGuidance(BaseObject):
             do so for text_embeddings_vd and text_embeddings_uncond
             then concatenate them
         """
-        text_embeddings = torch.cat(
-            [
-                text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1),
-                text_embeddings_uncond if not is_dual else text_embeddings_uncond.repeat(2, 1, 1),
-                text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1),
-            ], 
-            dim=0
-        )
+
 
         assert self.min_step is not None and self.max_step is not None
         with torch.no_grad():

@@ -258,6 +258,7 @@ class BaseDataset(Dataset, Updateable):
         # in MV-Dream, the camera distance is relative and related to the focal length
         # the following is the default setting, 
         # however, the relative camera distance is not used in supervised training
+        camera_distances_relative = camera_distances
         if relative_radius:
             scale = 1 / torch.tan(0.5 * fovy)
             camera_distances = scale * camera_distances
@@ -338,6 +339,7 @@ class BaseDataset(Dataset, Updateable):
             "elevation": elevation_deg,
             "azimuth": azimuth_deg,
             "camera_distances": camera_distances,
+            "camera_distances_relative": camera_distances_relative,
             "height": self.height,
             "width": self.width,
             "fovy": fovy_deg,
@@ -993,13 +995,12 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
                 + [obj['caption'] for obj in self.sup_obj_library["train"].values()] \
                 + [obj['caption'] for obj in self.sup_obj_library["val"].values()] \
                 + [obj['caption'] for obj in self.sup_obj_library["test"].values()]
-            self.guidance_processor.prepare_text_embeddings(
-                prompt_lists
-            )
             self.condition_processor.prepare_text_embeddings(
                 prompt_lists
             )
-
+            self.guidance_processor.prepare_text_embeddings(
+                prompt_lists
+            )
             
             self.train_dataset = MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(
                 self.cfg, 
@@ -1013,10 +1014,10 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
             # prepare the dataset
             prompt_lists = self.unsup_prompt_library["val"] \
                 + [obj['caption'] for obj in self.sup_obj_library["val"].values()]
-            self.guidance_processor.prepare_text_embeddings(
+            self.condition_processor.prepare_text_embeddings(
                 prompt_lists
             )
-            self.condition_processor.prepare_text_embeddings(
+            self.guidance_processor.prepare_text_embeddings(
                 prompt_lists
             )
 
@@ -1037,13 +1038,13 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
             else:
                 prompt_lists = self.unsup_prompt_library["test"] \
                     + [obj['caption'] for obj in self.sup_obj_library["test"].values()]
-            self.guidance_processor.prepare_text_embeddings(
-                prompt_lists
-            )
             self.condition_processor.prepare_text_embeddings(
                 prompt_lists
             )
-
+            self.guidance_processor.prepare_text_embeddings(
+                prompt_lists
+            )
+            
             self.test_dataset = MultiviewMultipromptDualRendererSemiSupervisedDataModule4Test(
                 self.cfg, 
                 unsup_prompt_library= self.unsup_prompt_library["test"],
