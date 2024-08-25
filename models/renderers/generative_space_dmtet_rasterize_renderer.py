@@ -140,8 +140,14 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             mask_aa = self.ctx.antialias(mask.float(), rast, v_pos_clip, mesh.t_pos_idx)
 
             # disparity, as required by RichDreamer
-            far= camera_distances + torch.sqrt(3 * torch.ones(1, device=camera_distances.device))
-            near = camera_distances - torch.sqrt(3 * torch.ones(1, device=camera_distances.device))
+            far= (
+                camera_distances + 
+                torch.sqrt(3 * torch.ones(1, device=camera_distances.device))
+            )[:, None, None, None]
+            near = (
+                camera_distances - 
+                torch.sqrt(3 * torch.ones(1, device=camera_distances.device))
+            )[:, None, None, None]
             disparity_tmp = depth.clamp_max(far)
             disparity_norm = (far - disparity_tmp) / (far - near)
             disparity_norm = disparity_norm.clamp(0, 1)

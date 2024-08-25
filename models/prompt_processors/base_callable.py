@@ -105,6 +105,16 @@ class MultiRefProcessor(BaseObject):
             # each process only has a subset of the prompt library!
             all_prompts = all_prompts[rank::num_gpus]
 
+        # add negative prompt to the list for rank 0
+        if rank == 0:
+            all_prompts += [self.cfg.negative_prompt]
+            # add other prompts, if any
+            if hasattr(self.cfg, "other_prompts") and self.cfg.other_prompts is not None:
+                try:
+                    all_prompts += self.cfg.other_prompts
+                except:
+                    all_prompts += [self.cfg.other_prompts]
+
         prompts_to_process = []
         for prompt in all_prompts:
             if self.cfg.use_cache:

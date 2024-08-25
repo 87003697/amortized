@@ -203,7 +203,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         **batch,
     ) -> Dict[str, Any]:
         # guidance for the first renderer
-        guidance_inp = out["comp_rgb"]
+        guidance_rgb = out["comp_rgb"]
 
         # specify the timestep range for the guidance
         if self.cfg.specifiy_guidance_timestep in [None]:
@@ -222,7 +222,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             raise NotImplementedError
 
         # guidance for the second renderer
-        guidance_inp_2nd = out_2nd["comp_rgb"]
+        guidance_rgb_2nd = out_2nd["comp_rgb"]
 
         # collect the guidance
         if "prompt_utils" not in batch:
@@ -231,16 +231,18 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         if not self.cfg.parallel_guidance:
             # the guidance is computed in two steps
             guidance_out = self.guidance(
-                guidance_inp, 
-                # batch["prompt_utils"], 
+                guidance_rgb, 
+                normal=out["comp_normal_cam_vis"] if "comp_normal_cam_vis" in out else None,
+                depth=out["disparity"] if "disparity" in out else None,
                 **batch, 
                 rgb_as_latents=self.cfg.rgb_as_latents,
                 timestep_range=timestep_range,
             )
 
             guidance_out_2nd = self.guidance(
-                guidance_inp_2nd, 
-                # batch["prompt_utils"],
+                guidance_rgb_2nd, 
+                normal=out_2nd["comp_normal_cam_vis"] if "comp_normal_cam_vis" in out_2nd else None,
+                depth=out_2nd["disparity"] if "disparity" in out_2nd else None,
                 **batch, 
                 rgb_as_latents=self.cfg.rgb_as_latents,
                 timestep_range=timestep_range,
@@ -248,11 +250,14 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         else:
             # the guidance is computed in parallel
             guidance_out, guidance_out_2nd = self.guidance(
-                guidance_inp,
-                # batch["prompt_utils"],
+                guidance_rgb,
+                normal=out["comp_normal_cam_vis"] if "comp_normal_cam_vis" in out else None,
+                depth=out["disparity"] if "disparity" in out else None,
                 **batch,
                 rgb_as_latents=self.cfg.rgb_as_latents,
-                rgb_2nd = guidance_inp_2nd,
+                rgb_2nd = guidance_rgb_2nd,
+                normal_2nd = out_2nd["comp_normal_cam_vis"] if "comp_normal_cam_vis" in out_2nd else None,
+                depth_2nd = out_2nd["disparity"] if "disparity" in out_2nd else None,
                 timestep_range=timestep_range,
             )
         loss_dict = self._compute_loss(guidance_out, out, renderer="1st", step = idx, **batch)
