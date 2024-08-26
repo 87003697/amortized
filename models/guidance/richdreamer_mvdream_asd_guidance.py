@@ -161,7 +161,7 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
         ################################################################################################
         # the folowing is shared between mvdream and stable diffusion
-        self.alphas = self.mv_model.alphas_cumprod
+        self.alphas = self.mv_model.alphas_cumprod if hasattr(self, "mv_model") else self.rd_model.alphas_cumprod
         self.grad_clip_val: Optional[float] = None
         self.num_train_timesteps = 1000
         self.set_min_max_steps()  # set to default value
