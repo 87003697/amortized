@@ -114,7 +114,10 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
     def _configure_scheduler(self, scheduler: str):
         assert scheduler in ["ddpm", "ddim", "dpm"]
-        assert self.cfg.predition_type in ["epsilon", "sample", "sample_delta", "sample_delta_v2", "sample_delta_v3"]
+        assert self.cfg.predition_type in [
+            "epsilon", "sample", "v_prediction",
+            "sample_delta", "sample_delta_v2", "sample_delta_v3"
+        ]
         
         # define the prediction type
         predition_type = self.cfg.predition_type
@@ -330,14 +333,14 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             alpha = (alphas[t] ** 0.5).view(-1, 1, 1, 1).to(self.device)
             sigma = ((1 - alphas[t]) ** 0.5).view(-1, 1, 1, 1).to(self.device)
 
-            if self.cfg.predition_type in ["epsilon"]:
+            if self.cfg.predition_type in ["epsilon", "v_prediction"]:
                 # predict the noise added
-                noise_pred = self.geometry.denoise(
+                pred = self.geometry.denoise(
                     noisy_input = noisy_latent_input,
                     text_embed = text_embed, # TODO: text_embed might be null
                     timestep = t.to(self.device),
                 )
-                latents = self.sample_scheduler.step(noise_pred, t, latents).prev_sample
+                latents = self.sample_scheduler.step(pred, t, latents).prev_sample
             elif self.cfg.predition_type in ["sample", "sample_delta", "sample_delta_v2", "sample_delta_v3"]:
                 output = self.geometry.denoise(
                     noisy_input = noisy_latent_input,
@@ -443,6 +446,13 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
                 # convert epsilon into x0
                 denoised_latents = (noisy_latent - sigma * noise_pred) / alpha
+            elif self.cfg.predition_type in ["v_prediction"]:
+                v_pred = self.geometry.denoise(
+                    noisy_input = noisy_latent,
+                    text_embed = text_embed, # TODO: text_embed might be null
+                    timestep = t.to(self.device),
+                )
+                denoised_latents = alpha * noisy_latent - sigma * v_pred
             elif self.cfg.predition_type in ["sample", "sample_delta", "sample_delta_v2", "sample_delta_v3"]:
                 output = self.geometry.denoise(
                     noisy_input = noisy_latent,
