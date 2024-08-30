@@ -66,6 +66,7 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         rd_guidance_scale: float = 7.5
         rd_weight: float = 1.
         rd_weighting_strategy: str = "uniform" # asd is suitable for uniform weighting, but can be extended to other strategies
+        cam_method: str = "rel_x2"  # rel_x2 or abs or rel
 
         # the following is shared between mvdream and stable diffusion
         grad_clip: Optional[
@@ -1106,6 +1107,17 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
             )
     
        ################################################################################################
+        if self.cfg.cam_method == "rel_x2":
+            camera_distances_input = camera_distances_relative * 2
+        elif self.cfg.cam_method == "rel":
+            camera_distances_input = camera_distances_relative
+        elif self.cfg.cam_method == "abs":
+            camera_distances_input = camera_distances
+        else:
+            raise ValueError(
+                f"Unknown camera method: {self.cfg.cam_method}"
+            )
+        
         # select only one view for the guidance
         if self.cfg.rd_weight > 0:
             loss_rd, grad_rd = self.rd_grad_asd(
@@ -1115,7 +1127,7 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 prompt_utils,
                 elevation,
                 azimuth,
-                camera_distances_relative * 2, # the trick in the original implementation
+                camera_distances_input, # the trick in the original implementation
                 c2w,
                 rgb_as_latents=rgb_as_latents,
                 fovy=fovy,
