@@ -38,7 +38,6 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
     class Config(NVDiffRasterizer.Config):
         # the following are from NeuS #########
         isosurface_resolution: int = 128
-        isosurface_deformable_grid: bool = True
 
         isosurface_remove_outliers: bool = False
         isosurface_outlier_n_faces_threshold: Union[int, float] = 0.01
