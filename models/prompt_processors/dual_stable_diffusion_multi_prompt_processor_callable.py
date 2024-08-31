@@ -261,6 +261,19 @@ class DualStableDiffusionMultipromptPromptProcessor(MultiRefProcessor):
             if self.cfg.use_embed_local:
                 return_dict["uncond_text_embeddings_local_2nd"] = data["local_text_embedding"]
 
+        # load the default unconditional text embeddings
+        data = _load_prompt_embedding(
+            "", # empty prompt
+            cache_dir=self._cache_dir,
+            pretrained_model_name_or_path=self.cfg.pretrained_model_name_or_path_2nd,
+            load_embed_global=self.cfg.use_embed_global,
+            load_embed_local=self.cfg.use_embed_local,
+        )
+        if self.cfg.use_embed_global:
+            return_dict["default_uncond_text_embeddings_global"] = data["global_text_embedding"]
+        if self.cfg.use_embed_local:
+            return_dict["default_uncond_text_embeddings_local"] = data["local_text_embedding"]
+
         return return_dict
     
     def __call__(
@@ -284,12 +297,17 @@ class DualStableDiffusionMultipromptPromptProcessor(MultiRefProcessor):
             if hasattr(self.cfg, "use_local_text_embeddings"):
                 prompt_args["use_local_text_embeddings"] = self.cfg.use_local_text_embeddings
 
-            return MultiRefProcessorOutput4Text_DualSD(
+            # # deprecated
+            # return MultiRefProcessorOutput4Text_DualSD(
+            #     device=self.device,
+            #     **prompt_args,
+            # )
+            
+            return MultiRefProcessorOutput4Text_DualSD_v2(
                 device=self.device,
                 **prompt_args,
             )
         
-
 @dataclass
 class MultiRefProcessorOutput4Text_DualSD:
     text_embeddings_global: Optional[List[Float[Tensor, "B ..."]]] = None
@@ -363,3 +381,72 @@ class MultiRefProcessorOutput4Text_DualSD:
         use_local_text_embeddings: Optional[bool] = None,
     ):
         raise NotImplementedError("Global text embeddings are not supported for this processor")
+
+
+@dataclass
+class MultiRefProcessorOutput4Text_DualSD_v2(MultiRefProcessorOutput4Text_DualSD):
+
+    # sort of a hack to make the processor compatible with the unconditional prompt of ""
+    default_uncond_text_embeddings_global: Optional[Float[Tensor, "B ..."]] = None
+    default_uncond_text_embeddings_local: Optional[Float[Tensor, "B ..."]] = None
+
+
+    def get_text_embeddings(
+        self,
+        use_default_neg = False,
+        **kwargs
+    ):
+        if "view_dependent_prompting" in kwargs and kwargs["view_dependent_prompting"]:
+            raise NotImplementedError("View-dependent prompting is not supported for text embeddings")
+
+        batch_size = len(self.text_embeddings_global)
+
+        # for the first model
+        text_embeddings = torch.stack(
+            self.text_embeddings_local,
+            dim=0
+        ).to(self.device)
+
+        uncond_text_embeddings_local = self.uncond_text_embeddings_local
+        if isinstance(self.uncond_text_embeddings_local, List):
+            uncond_text_embeddings_local = self.uncond_text_embeddings_local[0]
+        uncond_text_embeddings_local = uncond_text_embeddings_local[None, :, :].repeat(
+                batch_size, 1, 1
+            ).to(self.device)
+        
+        # for the second model
+        text_embeddings_2nd = torch.stack(
+            self.text_embeddings_local_2nd,
+            dim=0
+        ).to(self.device)
+
+        # can use the default unconditional text embeddings
+        if use_default_neg:
+            uncond_text_embeddings_local_2nd = self.default_uncond_text_embeddings_local
+            if isinstance(self.default_uncond_text_embeddings_local, List):
+                uncond_text_embeddings_local_2nd = self.default_uncond_text_embeddings_local[0]
+            uncond_text_embeddings_local_2nd = uncond_text_embeddings_local_2nd[None, :, :].repeat(
+                    batch_size, 1, 1
+                ).to(self.device)
+        else:
+            uncond_text_embeddings_local_2nd = self.uncond_text_embeddings_local_2nd
+            if isinstance(self.uncond_text_embeddings_local_2nd, List):
+                uncond_text_embeddings_local_2nd = self.uncond_text_embeddings_local_2nd[0]
+            uncond_text_embeddings_local_2nd = uncond_text_embeddings_local_2nd[None, :, :].repeat(
+                    batch_size, 1, 1
+                ).to(self.device)
+
+        
+        return torch.cat(
+            [
+                text_embeddings,
+                uncond_text_embeddings_local,
+            ],
+            dim=0,
+        ), torch.cat(
+            [
+                text_embeddings_2nd,
+                uncond_text_embeddings_local_2nd,
+            ],
+            dim=0,
+        )
