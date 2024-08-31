@@ -47,7 +47,6 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         isosurface_method: str = "mt" # "mt" or "mc-cpu"
 
         enable_bg_rays: bool = False
-        near_distance: float = 1.732
 
     cfg: Config
 
