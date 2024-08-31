@@ -1530,11 +1530,14 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 0, self.cfg.n_view,
                 (rgb.shape[0] // self.cfg.n_view,), device=self.device, dtype=torch.long
             )
+            idx += torch.arange(0, rgb.shape[0], self.cfg.n_view, device=self.device, dtype=torch.long)
             if is_dual:
                 idx_2nd = torch.randint(
                     0, self.cfg.n_view,
                     (rgb_2nd.shape[0] // self.cfg.n_view,), device=self.device, dtype=torch.long
                 )
+                idx_2nd += torch.arange(0, rgb_2nd.shape[0], self.cfg.n_view, device=self.device, dtype=torch.long)
+                
         if self.cfg.sd_weight > 0:
             loss_sd, grad_sd = self.sd_grad_asd(
                 rgb[idx],
