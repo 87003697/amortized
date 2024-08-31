@@ -60,7 +60,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         # overwrite the geometry
         self.geometry.isosurface = self.isosurface
 
-        assert self.cfg.isosurface_method in ["mt", "mc-cpu"]
+        assert self.cfg.isosurface_method in ["mt", "mc-cpu", "diffmc"], "Invalid isosurface method"
         if self.cfg.isosurface_method == "mt":
             from threestudio.models.isosurface import MarchingTetrahedraHelper
             self.isosurface_helper = MarchingTetrahedraHelper(
@@ -72,7 +72,11 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             self.isosurface_helper = MarchingCubeCPUHelper(
                 self.cfg.isosurface_resolution,
             )
-
+        elif self.cfg.isosurface_method == "diffmc":
+            from threestudio.models.isosurface import  DiffMarchingCubeHelper
+            self.isosurface_helper = DiffMarchingCubeHelper(
+                self.cfg.isosurface_resolution,
+            )
 
     def forward(
         self,
