@@ -186,6 +186,8 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
                     text_embed=text_embed,
                     **kwargs
                 )
+            
+            
 
     def _forward(
         self,
