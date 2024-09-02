@@ -244,11 +244,15 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
     ) -> Dict[str, Float[Tensor, "..."]]:
 
         batch_size, n_points, n_dims = points.shape
+
+
+        grad_enabled = torch.is_grad_enabled()
+        if output_normal and self.cfg.normal_type == "analytic":
+            torch.set_grad_enabled(True)
+            points.requires_grad_(True)
+
         points_unscaled = points
         points = self.rescale_points(points)
-
-        if output_normal and self.cfg.normal_type == "analytic":
-            raise NotImplementedError("analytic normal is not implemented yet.")
 
         enc = self.interpolate_encodings(points, space_cache)
         sdf = self.sdf_network(enc).view(*points.shape[:-1], 1)
@@ -283,6 +287,17 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
                 )
                 sdf_grad = (sdf_offset[..., 0::1, 0] - sdf) / eps
                 normal = F.normalize(sdf_grad, dim=-1)
+            elif self.cfg.normal_type == "analytic":
+                sdf_grad = -torch.autograd.grad(
+                    sdf,
+                    points_unscaled,
+                    grad_outputs=torch.ones_like(sdf),
+                    create_graph=True,
+                )[0]
+                normal = F.normalize(sdf_grad, dim=-1)
+                if not grad_enabled:
+                    sdf_grad = sdf_grad.detach()
+                    normal = normal.detach()
             else:
                 raise NotImplementedError(
                     f"normal_type == {self.cfg.normal_type} is not implemented yet."
@@ -376,10 +391,10 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
                 self.finite_difference_normal_eps = (
                     self.cfg.finite_difference_normal_eps
                 )
-        else:
-            raise NotImplementedError(
-                f"normal_type == {self.cfg.normal_type} is not implemented yet."
-            )
+        # else:
+        #     raise NotImplementedError(
+        #         f"normal_type == {self.cfg.normal_type} is not implemented yet."
+        #     )
 
     def train(self, mode=True):
         self.space_generator.train(mode)

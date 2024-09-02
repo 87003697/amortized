@@ -11,6 +11,22 @@ import torch.nn.functional as F
 from threestudio.utils.ops import scale_tensor
 from threestudio.utils.typing import *
 
+from ...extern.grid_sample_gradfix.cuda_gridsample import grid_sample_2d
+#----------------------------------------------------------------------------
+
+enabled = True  # Enable the custom op by setting this to true.
+
+#----------------------------------------------------------------------------
+
+def grid_sample(input, grid):
+    if grid.requires_grad and _should_use_custom_op():
+        return grid_sample_2d(input, grid, padding_mode='zeros', align_corners=False)
+    return torch.nn.functional.grid_sample(input=input, grid=grid, mode='bilinear', padding_mode='zeros', align_corners=False)
+
+#----------------------------------------------------------------------------
+
+def _should_use_custom_op():
+    return enabled
 
 def contract_to_unisphere_custom(
     x: Float[Tensor, "... 3"], bbox: Float[Tensor, "2 3"], unbounded: bool = False
@@ -117,7 +133,8 @@ def sample_from_planes(plane_features, coordinates, mode='bilinear', padding_mod
     coordinates = (2/box_warp) * coordinates # add specific box bounds
 
     projected_coordinates = project_onto_planes(planes.to(coordinates), coordinates).unsqueeze(1)
-    output_features = torch.nn.functional.grid_sample(plane_features, projected_coordinates.float(), mode=mode, padding_mode=padding_mode, align_corners=False)
+    # output_features = torch.nn.functional.grid_sample(plane_features, projected_coordinates.float(), mode=mode, padding_mode=padding_mode, align_corners=False)
+    output_features = grid_sample(plane_features, projected_coordinates.float())
     output_features = output_features.permute(0, 3, 2, 1).reshape(N, n_planes, M, C)
 
     if interpolate_feat in [None, "v1"]:
@@ -145,8 +162,9 @@ def sample_from_quaplanes(plane_features, coordinates, mode='bilinear', padding_
     coordinates = (2/box_warp) * coordinates # add specific box bounds
 
     projected_coordinates = project_onto_planes(quaplanes.to(coordinates), coordinates).unsqueeze(1)
-    output_features = torch.nn.functional.grid_sample(plane_features, projected_coordinates.float(), mode=mode, padding_mode=padding_mode, align_corners=False)
-    output_features = output_features.permute(0, 3, 2, 1).reshape(N, n_planes, M, C)
+    # output_features = torch.nn.functional.grid_sample(plane_features, projected_coordinates.float(), mode=mode, padding_mode=padding_mode, align_corners=False)
+    output_features = grid_sample(plane_features, projected_coordinates.float())
+    ooutput_features = output_features.permute(0, 3, 2, 1).reshape(N, n_planes, M, C)
     
     # the following is from https://github.com/3DTopia/OpenLRM/blob/d4caebbea3f446904d9faafaf734e797fcc4ec89/lrm/models/rendering/synthesizer.py#L42
     output_features = output_features.permute(0, 2, 1, 3).reshape(N, M, n_planes*C)
@@ -192,7 +210,8 @@ def sample_from_Hplanes(plane_features, coordinates, mode='bilinear', padding_mo
     coordinates = (2/box_warp) * coordinates # add specific box bounds
 
     projected_coordinates = project_onto_planes(Hplanes.to(coordinates), coordinates).unsqueeze(1)
-    output_features = torch.nn.functional.grid_sample(plane_features, projected_coordinates.float(), mode=mode, padding_mode=padding_mode, align_corners=False)
+    # output_features = torch.nn.functional.grid_sample(plane_features, projected_coordinates.float(), mode=mode, padding_mode=padding_mode, align_corners=False)
+    output_features = grid_sample(plane_features, projected_coordinates.float())
     output_features = output_features.permute(0, 3, 2, 1).reshape(N, n_planes, M, C)
     
     if interpolate_feat in [None, "v1"]:
