@@ -326,7 +326,10 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
                 sdf_grad = (sdf_offset[..., 0::1, 0] - sdf) / eps
                 normal = F.normalize(sdf_grad, dim=-1)
             elif self.cfg.normal_type == "analytic":
-                sdf_grad = -torch.autograd.grad(
+                # QUESTION: the sdf is >0 for points outside the shape in the original space
+                # so its normal should point outwards, but the normal is pointing inwards if we put a negative sign
+                # so we need to flip the normal by multiplying it by -1
+                sdf_grad = torch.autograd.grad(
                     sdf,
                     points_unscaled,
                     grad_outputs=torch.ones_like(sdf),
