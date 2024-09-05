@@ -381,7 +381,6 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             else:
                 deformation = deformation_batch[index]
 
-            sdf = sdf + 1000
             # special case when all sdf values are positive or negative, thus no isosurface
             if torch.all(sdf > 0) or torch.all(sdf < 0):
                 threestudio.info("All sdf values are positive or negative, no isosurface")
