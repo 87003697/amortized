@@ -387,9 +387,9 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 ratio_factor = 1.0
                 sdf_manually = self.geometry.get_shifted_sdf(points, torch.zeros_like(sdf))
                 # sdf_manually = torch.norm(points, dim=-1) - 0.1 # the sdf will be forced to be a very small ball
-                sdf = sdf * (1 - ratio_factor) + sdf_manually * ratio_factor # allow limited effect of original sdf
+                sdf = sdf.detach() * (1 - ratio_factor) + sdf_manually * ratio_factor # allow limited effect of original sdf
                 if deformation is not None:
-                    deformation = deformation * (1 - ratio_factor) + torch.zeros_like(deformation) * ratio_factor # allow limited effect of original deformation
+                    deformation = deformation.detach() * (1 - ratio_factor) + torch.zeros_like(deformation) * ratio_factor # allow limited effect of original deformation
 
             mesh = self.isosurface_helper(sdf, deformation)
             mesh.v_pos = scale_tensor(
