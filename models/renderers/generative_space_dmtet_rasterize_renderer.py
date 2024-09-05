@@ -78,6 +78,10 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 self.cfg.isosurface_resolution,
             )
 
+        # detect if the sdf is empty
+        self.empty_flag = False
+
+
     def forward(
         self,
         mvp_mtx: Float[Tensor, "B 4 4"],
@@ -106,6 +110,13 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             )
         # the isosurface is dependent on the space cache
         mesh_list = self.isosurface(space_cache)
+
+        # detect if the sdf is empty
+        if self.empty_flag:
+            is_emtpy = True
+            self.empty_flag = False
+        else:
+            is_emtpy = False
 
         out_list = []
         # if render a space cache in multiple views,
@@ -156,7 +167,12 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             disparity_norm = torch.lerp(torch.zeros_like(depth), disparity_norm, mask.float())
             disparity_norm = self.ctx.antialias(disparity_norm, rast, v_pos_clip, mesh.t_pos_idx)
 
-            out = {"opacity": mask_aa, "mesh": mesh, "depth": depth, "disparity": disparity_norm}
+            out = {
+                "opacity": mask_aa if not is_emtpy else mask.detach(),
+                "mesh": mesh,
+                "depth": depth if not is_emtpy else depth.detach(), 
+                "disparity": disparity_norm if not is_emtpy else disparity_norm.detach(),
+            }
 
             gb_normal, _ = self.ctx.interpolate_one(mesh.v_nrm, rast, mesh.t_pos_idx)
             gb_normal = F.normalize(gb_normal, dim=-1)
@@ -210,8 +226,8 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             )
 
             out.update({
-                "comp_normal_cam_vis": camera_gb_normal_bg,
-                "comp_normal_cam_vis_white": camera_gb_normal_bg_white,
+                "comp_normal_cam_vis": camera_gb_normal_bg if not is_emtpy else camera_gb_normal_bg.detach(),
+                "comp_normal_cam_vis_white": camera_gb_normal_bg_white if not is_emtpy else camera_gb_normal_bg_white.detach(),
             })
 
             if render_rgb:
@@ -258,14 +274,14 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
 
                 extra_geo_info = {}
                 if self.material.requires_normal:
-                    extra_geo_info["shading_normal"] = gb_normal[selector]
+                    extra_geo_info["shading_normal"] = gb_normal[selector] if not is_emtpy else gb_normal[selector].detach()
                 
                 if self.material.requires_tangent:
                     gb_tangent, _ = self.ctx.interpolate_one(
                         mesh.v_tng, rast, mesh.t_pos_idx
                     )
                     gb_tangent = F.normalize(gb_tangent, dim=-1)
-                    extra_geo_info["tangent"] = gb_tangent[selector]
+                    extra_geo_info["tangent"] = gb_tangent[selector] if not is_emtpy else gb_tangent[selector].detach()
 
                 # remove the following keys from geo_out
                 geo_out.pop("shading_normal", None)
@@ -305,7 +321,12 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 gb_rgb = torch.lerp(gb_rgb_bg, gb_rgb_fg, mask.float())
                 gb_rgb_aa = self.ctx.antialias(gb_rgb, rast, v_pos_clip, mesh.t_pos_idx)
 
-                out.update({"comp_rgb": gb_rgb_aa, "comp_rgb_bg": gb_rgb_bg})
+                out.update(
+                    {
+                        "comp_rgb": gb_rgb_aa if not is_emtpy else gb_rgb_aa.detach(),
+                        "comp_rgb_bg": gb_rgb_bg if not is_emtpy else gb_rgb_bg.detach(),
+                    }
+                )
 
             out_list.append(out)
 
@@ -349,6 +370,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         # get the isosurface
         mesh_list = []
 
+        # check if the sdf is empty
         # for sdf, deformation in zip(sdf_batch, deformation_batch):
         for index in range(sdf_batch.shape[0]):
             sdf = sdf_batch[index]
@@ -359,10 +381,11 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             else:
                 deformation = deformation_batch[index]
 
+            sdf = sdf + 1000
             # special case when all sdf values are positive or negative, thus no isosurface
             if torch.all(sdf > 0) or torch.all(sdf < 0):
                 threestudio.info("All sdf values are positive or negative, no isosurface")
-
+                self.empty_flag = True # special operation 
 
                 # attempt 1
                 # # if no sdf with 0, manually add 5% to be 0

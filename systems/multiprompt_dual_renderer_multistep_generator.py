@@ -263,8 +263,8 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 depth_2nd = out_2nd["disparity"] if "disparity" in out_2nd else None,
                 timestep_range=timestep_range,
             )
-        loss_dict = self._compute_loss(guidance_out, out, renderer="1st", step = idx, **batch)
-        loss_dict_2nd = self._compute_loss(guidance_out_2nd, out_2nd, renderer="2nd", step = idx, **batch)
+        loss_dict = self._compute_loss(guidance_out, out, renderer="1st", step = idx, has_grad = guidance_rgb.requires_grad, **batch)
+        loss_dict_2nd = self._compute_loss(guidance_out_2nd, out_2nd, renderer="2nd", step = idx, has_grad = guidance_rgb_2nd.requires_grad, **batch)
 
         return {
             "fidelity_loss": loss_dict["fidelity_loss"] + loss_dict_2nd["fidelity_loss"],
@@ -569,6 +569,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         out: Dict[str, Any],
         renderer: str = "1st",
         step: int = 0,
+        has_grad: bool = True,
         **batch,
     ):
         
@@ -714,7 +715,19 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         if "inv_std" in out:
             self.log("train/inv_std", out["inv_std"], prog_bar=True)
 
-        return {"fidelity_loss": fide_loss, "regularization_loss": regu_loss}
+        # detach the loss if necessary
+        if not has_grad:
+            if hasattr(fide_loss, "requires_grad") and fide_loss.requires_grad:
+                fide_loss = fide_loss.detach()
+                
+        if not has_grad:
+            if hasattr(regu_loss, "requires_grad") and regu_loss.requires_grad:
+                regu_loss = regu_loss.detach()
+
+        return {
+            "fidelity_loss": fide_loss,
+            "regularization_loss": regu_loss,
+        }
 
 
     def _save_image_grid(
