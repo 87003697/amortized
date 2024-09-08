@@ -815,7 +815,7 @@ class OneStepTriplaneStableDiffusion(BaseModule):
         if text_embed.ndim == 3:
             # same text_embed for all planes
             # repeat the text_embed
-            text_embed = text_embed.repeat_interleave(self.num_planes, dim=0)
+            text_embed = text_embed.repeat(self.num_planes, 1, 1)
         elif text_embed.ndim == 4:
             # different text_embed for each plane
             text_embed = text_embed.view(batch_size * self.num_planes, *text_embed.shape[-2:])
