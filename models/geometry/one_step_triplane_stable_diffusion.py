@@ -88,7 +88,7 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
         else:
             raise ValueError(f"Unknown interpolate_feat {self.cfg.interpolate_feat}")
         
-        if self.cfg.encode_position in ["None"]:
+        if self.cfg.encode_position in [None]:
             pass
         elif self.cfg.encode_position in ["v1"]:
             input_dim += 3 # add 3 for position encoding
