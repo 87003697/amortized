@@ -17,6 +17,8 @@ from tqdm import tqdm
 from .utils import hash_prompt, _load_prompt_embedding_v2 as _load_prompt_embedding
 from functools import partial
 
+
+from dataclasses import dataclass, field
 from threestudio.models.prompt_processors.base import (
     PromptProcessorOutput,
 
@@ -320,8 +322,18 @@ class MultiRefProcessorOutput4Text_DualSD:
     uncond_text_embeddings_global_2nd: Optional[Float[Tensor, "B ..."]] = None
     uncond_text_embeddings_local_2nd: Optional[Float[Tensor, "B ..."]] = None
 
+    # must have the following attributes
     use_local_text_embeddings: bool = False
     device: str = "cuda"
+
+    appendable_attributes: list = field(
+        default_factory=lambda: [
+            "text_embeddings_global",
+            "text_embeddings_local",
+            "text_embeddings_global_2nd",
+            "text_embeddings_local_2nd",
+        ]
+    )
 
     def get_uncond_text_embeddings(self):
         raise NotImplementedError("Unconditional text embeddings are not supported for this processor")

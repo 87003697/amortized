@@ -1,6 +1,7 @@
 import json
 import os
 from dataclasses import dataclass
+from dataclasses import field
 
 import torch
 import torch.multiprocessing as mp
@@ -401,8 +402,17 @@ class MultiRefProcessorOutput4Text:
     text_embeddings_local: Optional[List[Float[Tensor, "B ..."]]] = None
     uncond_text_embeddings_global: Optional[Float[Tensor, "B ..."]] = None
     uncond_text_embeddings_local: Optional[Float[Tensor, "B ..."]] = None
+    
+    # must have the following attributes
     use_local_text_embeddings: bool = False
     device: str = "cuda"
+
+    appendable_attributes: list = field(
+        default_factory=lambda: [
+            "text_embeddings_global",
+            "text_embeddings_local",
+        ]
+    )
 
     def get_uncond_text_embeddings(self):
         # only the local embeddings are uncond
@@ -461,7 +471,17 @@ class MultiRefProcessorOutput4Image:
     image_latents: Optional[List[Float[Tensor, "B ..."]]] = None
     image_embeddings_global: Optional[List[Float[Tensor, "B ..."]]] = None
     image_embeddings_local: Optional[List[Float[Tensor, "B ..."]]] = None
+    
+    # must have the following attributes
     device: str = "cuda"
+
+    appendable_attributes: list = field(
+        default_factory=lambda: [
+            "image_latents",
+            "image_embeddings_global",
+            "image_embeddings_local",
+        ]
+    )
 
     def get_uncond_image_encodings(self):
         return_dict = {}

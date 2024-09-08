@@ -156,11 +156,11 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             far= (
                 camera_distances + 
                 torch.sqrt(3 * torch.ones(1, device=camera_distances.device))
-            )[:, None, None, None]
+            )[batch_idx * num_views_per_batch : (batch_idx + 1) * num_views_per_batch, None, None, None]
             near = (
                 camera_distances - 
                 torch.sqrt(3 * torch.ones(1, device=camera_distances.device))
-            )[:, None, None, None]
+            )[batch_idx * num_views_per_batch : (batch_idx + 1) * num_views_per_batch, None, None, None]
             disparity_tmp = depth.clamp_max(far)
             disparity_norm = (far - disparity_tmp) / (far - near)
             disparity_norm = disparity_norm.clamp(0, 1)
@@ -191,7 +191,12 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             bg_normal_white = torch.ones_like(gb_normal)
 
             # convert_normal_to_cam_space
-            w2c: Float[Tensor, "B 4 4"] = torch.inverse(c2w)
+            w2c: Float[Tensor, "B 4 4"] = torch.inverse(
+                c2w[
+                    (batch_idx) * num_views_per_batch : 
+                    (batch_idx + 1) * num_views_per_batch
+                ]
+            )
             rotate: Float[Tensor, "B 3 3"] = w2c[:, :3, :3]
             # camera_batch_v_nrm = camera_batch_v_nrm @ rotate.permute(0, 2, 1)
             # gb_normal: B H W 3 -> B H W 1 3; rotate: B 3 3 -> B 1 1 3 3
