@@ -208,23 +208,35 @@ class BaseDataset(Dataset, Updateable):
         guidance_util_list = [x.pop("guidance_utils") for x in batch]
         guidance_utils = guidance_util_list[0]
         for other_guidance_utils in guidance_util_list[1:]:
+
             # merge the attributes in these guidance_utils, sort of hard-coded, apologies
             # these attributes include global_text_embeddings, local_text_embeddings, text_embeddings_vd
-            raise NotImplementedError("The following code is not implemented")
-            guidance_utils.global_text_embeddings.extend(other_guidance_utils.global_text_embeddings)
-            guidance_utils.local_text_embeddings.extend(other_guidance_utils.local_text_embeddings)
-            guidance_utils.text_embeddings_vd.extend(other_guidance_utils.text_embeddings_vd)
+            assert hasattr(guidance_utils, "appendable_attributes"), "Cannot merge guidance_utils"
+            assert type(guidance_utils.appendable_attributes) == list, "Cannot merge guidance_utils"
+            has_appendable_attributes = False
+            for attr in guidance_utils.appendable_attributes:
+                if hasattr(guidance_utils, attr):
+                    has_appendable_attributes = True
+                    getattr(guidance_utils, attr).extend(getattr(other_guidance_utils, attr))
+            if not has_appendable_attributes:
+                raise NotImplementedError("The Merge of guidance_utils is not implemented, please check the guidance_utils")
+
 
         condition_util_list = [x.pop("condition_utils") for x in batch]
         condition_utils = condition_util_list[0]
         for other_condition_utils in condition_util_list[1:]:
             # merge the attributes in these condition_utils, sort of hard-coded, apologies
             # these attributes include global_text_embeddings, local_text_embeddings, text_embeddings_vd
-            raise NotImplementedError("The following code is not implemented")
-            condition_utils.global_text_embeddings.extend(other_condition_utils.global_text_embeddings)
-            condition_utils.local_text_embeddings.extend(other_condition_utils.local_text_embeddings)
-            condition_utils.text_embeddings_vd.extend(other_condition_utils.text_embeddings)
-
+            assert hasattr(condition_utils, "appendable_attributes"), "Cannot merge condition_utils"
+            assert type(condition_utils.appendable_attributes) == list, "Cannot merge condition_utils"
+            has_appendable_attributes = False
+            for attr in condition_utils.appendable_attributes:
+                if hasattr(condition_utils, attr):
+                    has_appendable_attributes = True
+                    getattr(condition_utils, attr).extend(getattr(other_condition_utils, attr))
+            if not has_appendable_attributes:
+                raise NotImplementedError("The Merge of condition_utils is not implemented, please check the condition_utils")
+            
         batch = torch.utils.data.default_collate(batch)
         batch.update(
             {
@@ -960,7 +972,7 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
                 self.sup_obj_library = json.load(f)
 
         ##############################################################################################################
-        self.num_workers = 2 #0 # for debugging
+        self.num_workers = 2 # for debugging
         self.pin_memory = False
         self.prefetch_factor = 2 if self.num_workers > 0 else None
 
