@@ -65,6 +65,8 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
         rotate_planes: Optional[str] = None # "v1"
         interpolate_feat: Optional[str] = None # "v1", "v2"
 
+        encode_position: Optional[str] = None # "v1"
+
 
     def configure(self) -> None:
         super().configure()
@@ -77,7 +79,7 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
             raise ValueError(f"Unknown backbone {self.cfg.backbone}")
 
         # set up the mlp
-        if self.cfg.interpolate_feat in ["v1"]:
+        if self.cfg.interpolate_feat in ["v1", "v4"]:
             input_dim = self.space_generator.output_dim * 1 # feat_xy + feat_xz + feat_yz
         elif self.cfg.interpolate_feat in ["v2"]:
             input_dim = self.space_generator.output_dim * 3 # feat_xy concat feat_xz concat feat_yz
@@ -85,6 +87,13 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
             input_dim = self.space_generator.output_dim * 1 - 1 # alpha_xy * feat_xy + alpha_xz * feat_xz + alpha_yz * feat_yz 
         else:
             raise ValueError(f"Unknown interpolate_feat {self.cfg.interpolate_feat}")
+        
+        if self.cfg.encode_position in [None]:
+            pass
+        elif self.cfg.encode_position in ["v1"]:
+            input_dim += 3 # add 3 for position encoding
+        else:
+            raise ValueError(f"Unknown encode_position {self.cfg.encode_position}")
         
         self.sdf_network = get_mlp(
             input_dim,
@@ -219,11 +228,22 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
                 space_cache[:, 2::3], k=-1, dims=(3, 4)
             )
 
-        return sample_from_planes(
+        feat = sample_from_planes(
             plane_features = space_cache_rotated,
             coordinates = points,
             interpolate_feat = self.cfg.interpolate_feat
         ).view(*points.shape[:-1],-1)
+
+        if self.cfg.encode_position in [None]:
+            pass
+        elif self.cfg.encode_position in ["v1"]:
+            feat = torch.cat(
+                [feat, points], dim=-1
+            )
+        else:
+            raise ValueError(f"Unknown encode_position {self.cfg.encode_position}")
+        
+        return feat
 
 
     def rescale_points(
