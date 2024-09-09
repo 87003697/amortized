@@ -45,8 +45,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         context_type: str = "cuda"
         isosurface_method: str = "mt" # "mt" or "mc-cpu"
 
-        isosurface_method_2nd: Optional[str] = None
-        ratio_2nd: Optional[float] = None
+        detach_ratio: float = 0.0
 
         enable_bg_rays: bool = False
 
@@ -83,16 +82,6 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
 
         # detect if the sdf is empty
         self.empty_flag = False
-
-        # the 2nd isosurface method
-        assert self.cfg.isosurface_method_2nd in ["mc-cpu", None], "Invalid isosurface method"
-        if self.cfg.isosurface_method_2nd == "mc-cpu":
-            from threestudio.models.isosurface import  MarchingCubeCPUHelper
-            self.isosurface_helper_2nd = MarchingCubeCPUHelper(
-                self.cfg.isosurface_resolution,
-            )
-        else:
-            self.isosurface_helper_2nd = None
 
 
 
@@ -367,16 +356,12 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
     def isosurface(self, space_cache: Float[Tensor, "B ..."]) -> List[Mesh]:
 
         # the isosurface is dependent on the space cache
-        # randomly select the isosurface method, because diffmc is not as stable as mc-cpu
-        if self.isosurface_helper_2nd is not None and self.training:
-            # decide whether to use the 2nd isosurface method
-            assert self.cfg.ratio_2nd is not None, "ratio_2nd is not set"
-            if torch.rand(1).item() < self.cfg.ratio_2nd:
-                isosurface_helper = self.isosurface_helper_2nd
-            else:
-                isosurface_helper = self.isosurface_helper
-        else:
-            isosurface_helper = self.isosurface_helper
+        # randomly detach isosurface method if it is differentiable
+        
+        detach_flag = False
+        if self.training and self.cfg.detach_ratio > 0.0:
+            if torch.rand(1).item() < self.cfg.detach_ratio:
+                detach_flag = True
 
         # get the batchsize
         if torch.is_tensor(space_cache): #space cache
@@ -389,8 +374,8 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
 
         # scale the points to [-1, 1]
         points = scale_tensor(
-            isosurface_helper.grid_vertices.to(self.device),
-            isosurface_helper.points_range,
+            self.isosurface_helper.grid_vertices.to(self.device),
+            self.isosurface_helper.points_range,
             [-1, 1], # hard coded isosurface_bbox
         )
         # get the sdf values    
@@ -444,10 +429,17 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 if deformation is not None:
                     deformation = deformation.detach() * (1 - ratio_factor) + torch.zeros_like(deformation) * ratio_factor # allow limited effect of original deformation
 
-            mesh = isosurface_helper(sdf, deformation)
+            if detach_flag:
+                mesh = self.isosurface_helper(
+                    sdf.detach(), 
+                    deformation.detach() if deformation is not None else None,
+                )
+            else:
+                mesh = self.isosurface_helper(sdf, deformation)
+            
             mesh.v_pos = scale_tensor(
                 mesh.v_pos,
-                isosurface_helper.points_range,
+                self.isosurface_helper.points_range,
                 [-1, 1], # hard coded isosurface_bbox
             )
             if self.cfg.isosurface_remove_outliers:
