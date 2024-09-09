@@ -568,6 +568,7 @@ class OneStepTriplaneStableDiffusion(BaseModule):
         locon_type: str = "triple_v1"
         prompt_bias: bool = False
         prompt_bias_lr_multiplier: float = 1.0
+        conv_out_initiation: Optional[str] = None # None, v1, v2, v3
 
     cfg: Config
 
@@ -674,6 +675,27 @@ class OneStepTriplaneStableDiffusion(BaseModule):
             in_channels=128, # conv_out_orig.in_channels, hard-coded
             out_channels=self.cfg.output_dim, kernel_size=3, padding=1
         )
+
+        if self.cfg.conv_out_initiation in [None]:
+            pass
+        elif self.cfg.conv_out_initiation in ["v1"]:
+            # set the bias to zero
+            nn.init.zeros_(conv_out_new.bias)
+        elif self.cfg.conv_out_initiation in ["v2"]:
+            # inherit from the original conv_out
+            conv_out_orig = self.vae.decoder.conv_out
+            dim_out = conv_out_orig.weight.size(0)
+            conv_out_new.weight.data[-dim_out:] = conv_out_orig.weight.data
+            conv_out_new.bias.data[-dim_out:] = conv_out_orig.bias.data
+        elif self.cfg.conv_out_initiation in ["v3"]:
+            # combine v1 and v2
+            nn.init.zeros_(conv_out_new.bias)
+            conv_out_orig = self.vae.decoder.conv_out
+            dim_out = conv_out_orig.weight.size(0)
+            conv_out_new.weight.data[-dim_out:] = conv_out_orig.weight.data
+            conv_out_new.bias.data[-dim_out:] = conv_out_orig.bias.data
+        else:
+            raise NotImplementedError("The conv_out_initiation is not supported.")
 
         # update the trainable parameters
         self.vae.decoder.conv_out = conv_out_new
