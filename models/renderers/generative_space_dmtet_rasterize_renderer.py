@@ -45,8 +45,6 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         context_type: str = "cuda"
         isosurface_method: str = "mt" # "mt" or "mc-cpu"
 
-        detach_ratio: float = 0.0
-
         enable_bg_rays: bool = False
 
     cfg: Config
@@ -357,11 +355,6 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
 
         # the isosurface is dependent on the space cache
         # randomly detach isosurface method if it is differentiable
-        
-        detach_flag = False
-        if self.training and self.cfg.detach_ratio > 0.0:
-            if torch.rand(1).item() < self.cfg.detach_ratio:
-                detach_flag = True
 
         # get the batchsize
         if torch.is_tensor(space_cache): #space cache
@@ -429,11 +422,15 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 if deformation is not None:
                     deformation = deformation.detach() * (1 - ratio_factor) + torch.zeros_like(deformation) * ratio_factor # allow limited effect of original deformation
 
-            if detach_flag:
-                mesh = self.isosurface_helper(
-                    sdf.detach(), 
-                    deformation.detach() if deformation is not None else None,
-                )
+            if index > 0 and self.cfg.isosurface_method == "diffmc":
+                # according to https://github.com/SarahWeiii/diso/issues/2
+                # if the batch size is larger than 1, then should use unique isosurface for each data
+                if not hasattr(self, f"isosurface_helper_{index}"):
+                    from threestudio.models.isosurface import  DiffMarchingCubeHelper
+                    setattr(self, f"isosurface_helper_{index}", DiffMarchingCubeHelper(
+                        self.cfg.isosurface_resolution,
+                    ))
+                mesh = getattr(self, f"isosurface_helper_{index}")(sdf, deformation)
             else:
                 mesh = self.isosurface_helper(sdf, deformation)
             
