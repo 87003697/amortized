@@ -81,6 +81,20 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         # detect if the sdf is empty
         self.empty_flag = False
 
+        # follow InstantMesh 
+        grid_res = self.cfg.isosurface_resolution
+
+        v = torch.zeros([grid_res] * 3, dtype=torch.bool,)
+        v[grid_res // 2:grid_res // 2 + 1, grid_res // 2:grid_res // 2 + 1, grid_res // 2:grid_res // 2 + 1] = True
+        self.center_indices = torch.nonzero(v.reshape(-1)).to(self.device)
+
+        v = torch.zeros([grid_res] * 3, dtype=torch.bool,)
+        v[:2, :, :] = True; v[-2:, :, :] = True
+        v[:, :2, :] = True; v[:, -2:, :] = True
+        v[:, :, :2] = True; v[:, :, -2:] = True
+        self.border_indices = torch.nonzero(v.reshape(-1)).to(self.device)
+
+
 
 
     def forward(
@@ -390,10 +404,11 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             else:
                 deformation = deformation_batch[index]
 
+            sdf = sdf + 10000
             # special case when all sdf values are positive or negative, thus no isosurface
             if torch.all(sdf > 0) or torch.all(sdf < 0):
                 threestudio.info("All sdf values are positive or negative, no isosurface")
-                self.empty_flag = True # special operation 
+                # self.empty_flag = True # special operation, set to detach the gradient from wrong isosurface
 
                 # attempt 1
                 # # if no sdf with 0, manually add 5% to be 0
@@ -413,14 +428,26 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 # sdf_mean = torch.mean(sdf).detach()
                 # sdf = sdf - sdf_mean
 
-                # attempt 3
-                # set the sdf values to be the norm of the points
-                ratio_factor = 1.0
-                sdf_manually = self.geometry.get_shifted_sdf(points, torch.zeros_like(sdf))
-                # sdf_manually = torch.norm(points, dim=-1) - 0.1 # the sdf will be forced to be a very small ball
-                sdf = sdf.detach() * (1 - ratio_factor) + sdf_manually * ratio_factor # allow limited effect of original sdf
-                if deformation is not None:
-                    deformation = deformation.detach() * (1 - ratio_factor) + torch.zeros_like(deformation) * ratio_factor # allow limited effect of original deformation
+                # # attempt 3
+                # # set the sdf values to be the norm of the points
+                # ratio_factor = 1.0
+                # sdf_manually = self.geometry.get_shifted_sdf(points, torch.zeros_like(sdf))
+                # # sdf_manually = torch.norm(points, dim=-1) - 0.1 # the sdf will be forced to be a very small ball
+                # sdf = sdf.detach() * (1 - ratio_factor) + sdf_manually * ratio_factor # allow limited effect of original sdf
+                # if deformation is not None:
+                #     deformation = deformation.detach() * (1 - ratio_factor) + torch.zeros_like(deformation) * ratio_factor # allow limited effect of original deformation
+
+                # attempt 4
+                # follow InstantMesh https://github.com/TencentARC/InstantMesh/blob/main/src/models/lrm_mesh.py
+                update_sdf = torch.zeros_like(sdf)
+                max_sdf = sdf.max()
+                min_sdf = sdf.min()
+                update_sdf[self.center_indices] += (-1 - max_sdf) # smaller than zero
+                update_sdf[self.border_indices] += (1 - min_sdf) # larger than zero
+                new_sdf = sdf + update_sdf
+                update_mask = (new_sdf == 0).float()
+                sdf = new_sdf * (1 - update_mask) + sdf * update_mask
+
 
             if index > 0 and self.cfg.isosurface_method == "diffmc":
                 # according to https://github.com/SarahWeiii/diso/issues/2
