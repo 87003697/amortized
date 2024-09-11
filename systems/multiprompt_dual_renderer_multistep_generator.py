@@ -638,7 +638,20 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 self.log(f"train/loss_z_variance_2nd_{step}", loss_z_variance)
                 regu_loss += loss_z_variance * self.C(self.cfg.loss.lambda_z_variance_2nd)
 
-        # sdf loss
+        if (renderer == "1st" and self.C(self.cfg.loss.lambda_sdf_abs) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_sdf_abs_2nd) > 0):
+            if 'sdf' not in out:
+                raise ValueError(
+                    "sdf is required for sdf_abs loss, no sdf is found in the output."
+                )
+            loss_sdf_abs = out["sdf"].abs().mean()
+            if renderer == "1st":
+                self.log(f"train/loss_sdf_abs_{step}", loss_sdf_abs)
+                regu_loss += loss_sdf_abs * self.C(self.cfg.loss.lambda_sdf_abs)
+            else:
+                self.log(f"train/loss_sdf_abs_2nd_{step}", loss_sdf_abs)
+                regu_loss += loss_sdf_abs * self.C(self.cfg.loss.lambda_sdf_abs_2nd)
+
+        # sdf eikonal loss
         if (renderer == "1st" and self.C(self.cfg.loss.lambda_eikonal) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_eikonal_2nd) > 0):
             if 'sdf_grad' not in out:
                 raise ValueError(
