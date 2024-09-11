@@ -277,10 +277,11 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
         points = self.rescale_points(points)
 
         enc = self.interpolate_encodings(points, space_cache)
-        sdf = self.sdf_network(enc).view(*points.shape[:-1], 1)
-        sdf = self.get_shifted_sdf(points_unscaled, sdf)
+        sdf_orig = self.sdf_network(enc).view(*points.shape[:-1], 1)
+        sdf = self.get_shifted_sdf(points_unscaled, sdf_orig)
         output = {
-                "sdf": sdf.view(batch_size * n_points, 1) # reshape to [B*N, 1]
+                "sdf": sdf.view(batch_size * n_points, 1), # reshape to [B*N, 1]
+                "sdf_orig": sdf_orig.view(batch_size * n_points, 1) # reshape to [B*N, 1]
             }
 
         if self.cfg.n_feature_dims > 0:
