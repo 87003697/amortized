@@ -643,7 +643,14 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 raise ValueError(
                     "sdf is required for sdf_abs loss, no sdf is found in the output."
                 )
-            loss_sdf_abs = out["sdf"].abs().mean()
+            if isinstance(out["sdf"], torch.Tensor):
+                loss_sdf_abs = out["sdf"].abs().mean()
+            else:
+                loss_sdf_abs = 0
+                for sdf in out["sdf"]:
+                    loss_sdf_abs += sdf.abs().mean()
+                loss_sdf_abs /= len(out["sdf"])
+
             if renderer == "1st":
                 self.log(f"train/loss_sdf_abs_{step}", loss_sdf_abs)
                 regu_loss += loss_sdf_abs * self.C(self.cfg.loss.lambda_sdf_abs)
@@ -657,9 +664,19 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 raise ValueError(
                     "sdf is required for eikonal loss, no sdf is found in the output."
                 )
-            loss_eikonal = (
-                (torch.linalg.norm(out["sdf_grad"], ord=2, dim=-1) - 1.0) ** 2
-            ).mean()
+            
+            if isinstance(out["sdf_grad"], torch.Tensor):
+                loss_eikonal = (
+                    (torch.linalg.norm(out["sdf_grad"], ord=2, dim=-1) - 1.0) ** 2
+                ).mean()
+            else:
+                loss_eikonal = 0
+                for sdf_grad in out["sdf_grad"]:
+                    loss_eikonal += (
+                        (torch.linalg.norm(sdf_grad, ord=2, dim=-1) - 1.0) ** 2
+                    ).mean()
+                loss_eikonal /= len(out["sdf_grad"])
+
             
             if renderer == "1st":
                 self.log(f"train/loss_eikonal_{step}", loss_eikonal)

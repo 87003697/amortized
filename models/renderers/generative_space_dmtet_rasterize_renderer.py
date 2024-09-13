@@ -311,9 +311,23 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
 
                 # add sdf values for computing loss
                 if "sdf_grad" in geo_out:
-                    out.update({"sdf_grad": geo_out["sdf_grad"]})
+                    if "sdf" in geo_out:
+                        out["sdf_grad"].extend(
+                            geo_out["sdf_grad"]
+                        )
+                    else:
+                        out["sdf_grad"] = geo_out[
+                            "sdf_grad"
+                        ]
                 if "sdf" in geo_out:
-                    out.update({"sdf": geo_out["sdf"]})    
+                    if "sdf" in out:
+                        out["sdf"].extend(
+                            geo_out["sdf"]
+                        )
+                    else:
+                        out["sdf"] = geo_out[
+                            "sdf"
+                        ]
 
                 rgb_fg = self.material(
                     viewdirs=gb_viewdirs[selector],
@@ -358,7 +372,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         # stack the outputs
         out = {}
         for key in out_list[0].keys():
-            if key not in ["mesh"]: # hard coded for mesh
+            if key not in ["mesh", "sdf_grad", "sdf"]: # hard coded for special case
                 out[key] = torch.concat([o[key] for o in out_list], dim=0)
             else:
                 out[key] = [o[key] for o in out_list]
@@ -412,7 +426,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             # special case when all sdf values are positive or negative, thus no isosurface
             if torch.all(sdf > 0) or torch.all(sdf < 0):
                 threestudio.info("All sdf values are positive or negative, no isosurface")
-                self.empty_flag = True # special operation, set to detach the gradient from wrong isosurface
+                # self.empty_flag = True # special operation, set to detach the gradient from wrong isosurface
 
                 # attempt 1
                 # # if no sdf with 0, manually add 5% to be 0
