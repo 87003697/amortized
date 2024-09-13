@@ -412,7 +412,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             # special case when all sdf values are positive or negative, thus no isosurface
             if torch.all(sdf > 0) or torch.all(sdf < 0):
                 threestudio.info("All sdf values are positive or negative, no isosurface")
-                # self.empty_flag = True # special operation, set to detach the gradient from wrong isosurface
+                self.empty_flag = True # special operation, set to detach the gradient from wrong isosurface
 
                 # attempt 1
                 # # if no sdf with 0, manually add 5% to be 0
@@ -470,6 +470,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 self.isosurface_helper.points_range,
                 [-1, 1], # hard coded isosurface_bbox
             )
+            
             if self.cfg.isosurface_remove_outliers:
                 mesh = mesh.remove_outlier(self.cfg.isosurface_outlier_n_faces_threshold)
             mesh_list.append(mesh)
