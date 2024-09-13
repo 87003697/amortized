@@ -309,6 +309,8 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 # add sdf values for computing loss
                 if "sdf_grad" in geo_out:
                     out.update({"sdf_grad": geo_out["sdf_grad"]})
+                if "sdf" in geo_out:
+                    out.update({"sdf": geo_out["sdf"]})    
 
                 rgb_fg = self.material(
                     viewdirs=gb_viewdirs[selector],
