@@ -423,7 +423,9 @@ class GenerativeSpaceDiffMCRasterizeRenderer(NVDiffRasterizer):
 
             # find the value of the sdf that is most close to 0
             idx = torch.argmin(sdf.abs())
-            iso_value = sdf[idx].mean().item()
+            eps = 1e-4
+            iso_value = sdf[idx][0].item()
+            iso_value = iso_value + eps if iso_value > 0 else iso_value - eps
 
             if index > 0 and self.cfg.isosurface_method == "diffmc":
                 # according to https://github.com/SarahWeiii/diso/issues/2
