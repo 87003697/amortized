@@ -421,12 +421,35 @@ class GenerativeSpaceDiffMCRasterizeRenderer(NVDiffRasterizer):
             else:
                 deformation = deformation_batch[index]
 
-            # find the value of the sdf that is most close to 0
-            idx = torch.argmin(sdf.abs())
-            eps = 1e-4
-            iso_value = sdf[idx][0].item()
-            iso_value = iso_value + eps if iso_value > 0 else iso_value - eps
+            # # for debugging
+            # sdf = sdf - 1000
+            # res = self.cfg.isosurface_resolution
+            # sdf_nxnxn = sdf.view(res, res, res)[1:-1, 1:-1, 1:-1].reshape(-1)
+            # iso_index = torch.argmin(torch.abs(sdf_nxnxn))
+            # iso_value = sdf_nxnxn[iso_index].item()
+            # iso_value_next = sdf_nxnxn[sdf_nxnxn < iso_value].max().item()
+            # sdf = sdf - iso_value + 0.2 * (iso_value - iso_value_next)
 
+
+            # find the value of the sdf that is most close to 0
+            res = self.cfg.isosurface_resolution
+            sdf_nxnxn = sdf.view(res, res, res)[1:-1, 1:-1, 1:-1].reshape(-1)
+            iso_index = torch.argmin(torch.abs(sdf_nxnxn))
+            iso_value = sdf_nxnxn[iso_index].item()
+            if iso_value >= 0:
+                # find the least value that is larger than iso_value
+                mask = sdf_nxnxn > iso_value
+                iso_value = sdf_nxnxn[mask].min().item() if mask.sum() > 0 \
+                    else sdf_nxnxn[sdf_nxnxn < iso_value].max().item()
+            else:
+                # find the largest value that is smaller than iso_value
+                mask = sdf_nxnxn < iso_value
+                iso_value = sdf_nxnxn[mask].max().item() if mask.sum() > 0 \
+                    else sdf_nxnxn[sdf_nxnxn > iso_value].min().item()
+
+
+ 
+                
             if index > 0 and self.cfg.isosurface_method == "diffmc":
                 # according to https://github.com/SarahWeiii/diso/issues/2
                 # if the batch size is larger than 1, then should use unique isosurface for each data
