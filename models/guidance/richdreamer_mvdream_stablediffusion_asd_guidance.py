@@ -245,9 +245,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 t_plus = plus_ratio * t
             else:
                 raise ValueError(f"Invalid t_plus_type: {self.cfg.t_plus_type}")
-            
-            t_plus = plus_ratio * (t - self.min_step)
-        
+                    
         elif self.cfg.plus_schedule.startswith("sqrt"):
             bias = 0
             if self.cfg.plus_schedule.startswith("sqrt_"): # if bias is specified
@@ -271,7 +269,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         elif self.cfg.t_plus_type in ["v2", "v4"]:
             t_plus = torch.clamp(
                 t_plus,
-                torch.zeros_like(t), 
+                0,
                 self.num_train_timesteps - 1,
             )
         else:
