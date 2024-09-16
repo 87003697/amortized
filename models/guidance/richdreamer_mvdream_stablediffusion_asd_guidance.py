@@ -61,6 +61,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         rd_guidance_scale: float = 7.5
         rd_weight: float = 1.
         rd_weighting_strategy: str = "uniform" # asd is suitable for uniform weighting, but can be extended to other strategies
+        rd_use_sds: bool = False
         cam_method: str = "rel_x2"  # rel_x2 or abs or rel
 
         # the following is specific to mvdream
@@ -96,6 +97,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         rd_plus_ratio: float = 0.1
         sd_plus_random: bool = True
         sd_plus_ratio: float = 0.1
+        t_plus_type: str = "v1" # v1, v2, v3, v4
 
         # strategy to save memory
         gradient_checkpoint: bool = False
@@ -236,6 +238,14 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
 
         # determine the timestamp for the second diffusion model
         if self.cfg.plus_schedule == "linear":
+
+            if self.cfg.t_plus_type in ["v1", "v2"]:
+                t_plus = plus_ratio * (t - self.min_step)
+            elif self.cfg.t_plus_type in ["v3", "v4"]:
+                t_plus = plus_ratio * t
+            else:
+                raise ValueError(f"Invalid t_plus_type: {self.cfg.t_plus_type}")
+            
             t_plus = plus_ratio * (t - self.min_step)
         
         elif self.cfg.plus_schedule.startswith("sqrt"):
@@ -252,11 +262,20 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
             raise ValueError(f"Invalid plus_schedule: {self.cfg.plus_schedule}")
 
         # clamp t_plus to the range [0, T_max - t], added in the revision
-        t_plus = torch.clamp(
-            t_plus,
-            torch.zeros_like(t), 
-            self.num_train_timesteps - t - 1,
-        )
+        if self.cfg.t_plus_type in ["v1", "v3"]:
+            t_plus = torch.clamp(
+                t_plus,
+                torch.zeros_like(t), 
+                self.num_train_timesteps - t - 1,
+            )
+        elif self.cfg.t_plus_type in ["v2", "v4"]:
+            t_plus = torch.clamp(
+                t_plus,
+                torch.zeros_like(t), 
+                self.num_train_timesteps - 1,
+            )
+        else:
+            raise ValueError(f"Invalid t_plus_type: {self.cfg.t_plus_type}")
 
         # add the offset
         if plus_random:
@@ -761,7 +780,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
             Wrapper for the noise prediction of the RichDreamer model
         """
         # determine attributes ################################################################################################
-        use_t_plus = self.cfg.rd_plus_ratio > 0
+        use_t_plus = self.cfg.rd_plus_ratio > 0 and not self.cfg.rd_use_sds
 
         # prepare text embeddings ################################################################################################
         text_embeddings = [
@@ -844,7 +863,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
             noise_pred_text, noise_pred_uncond = noise_pred.chunk(
                 2
             )
-            noise_pred_text_second = noise_pred_text
+            noise_pred_text_second = noise_pred_text if not self.cfg.rd_use_sds else rd_noise
 
         return noise_pred_text, noise_pred_uncond, noise_pred_text_second
 
