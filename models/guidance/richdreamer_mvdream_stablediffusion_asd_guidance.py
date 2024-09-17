@@ -969,7 +969,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 f"Unknown weighting strategy: {self.cfg.rd_weighting_strategy}"
             )
 
-        noise_pred_first = noise_pred_uncond + self.cfg.mv_guidance_scale * (
+        noise_pred_first = noise_pred_uncond + self.cfg.rd_guidance_scale * (
             noise_pred_text - noise_pred_uncond
         )
         noise_pred_second = noise_pred_text_second
