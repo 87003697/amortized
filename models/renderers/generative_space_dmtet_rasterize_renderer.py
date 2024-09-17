@@ -48,7 +48,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         enable_bg_rays: bool = False
 
         # sdf forcing strategy for generative space
-        sdf_forcing: str = "v1"
+        sdf_grad_shrink: float = 1.
 
     cfg: Config
 
@@ -409,6 +409,11 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             points[None, ...].expand(batch_size, -1, -1),
             space_cache
         )
+
+        # change the gradient of the sdf
+        sdf_batch = self.cfg.sdf_grad_shrink * sdf_batch + (1 - self.cfg.sdf_grad_shrink) * sdf_batch.detach()
+        deformation_batch = self.cfg.sdf_grad_shrink * deformation_batch + (1 - self.cfg.sdf_grad_shrink) * deformation_batch.detach() if deformation_batch is not None else None
+
         # get the isosurface
         mesh_list = []
 
@@ -446,26 +451,15 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 # sdf_mean = torch.mean(sdf).detach()
                 # sdf = sdf - sdf_mean
 
-                # attempt 4
-                if (not self.training) or (self.training and self.cfg.sdf_forcing == "v1"):
-                    # follow InstantMesh https://github.com/TencentARC/InstantMesh/blob/main/src/models/lrm_mesh.py
-                    update_sdf = torch.zeros_like(sdf)
-                    max_sdf = sdf.max()
-                    min_sdf = sdf.min()
-                    update_sdf[self.center_indices] += (-1 - max_sdf) # smaller than zero
-                    update_sdf[self.border_indices] += (1 - min_sdf) # larger than zero
-                    new_sdf = sdf + update_sdf
-                    update_mask = (new_sdf == 0).float()
-                    sdf = new_sdf * (1 - update_mask) + sdf * update_mask
-                elif self.training and self.cfg.sdf_forcing == "v2":
-                    # # set the sdf values to be the norm of the points
-                    ratio_factor = 1.0
-                    sdf_manually = self.geometry.get_shifted_sdf(points, torch.zeros_like(sdf))
-                    # sdf_manually = torch.norm(points, dim=-1) - 0.1 # the sdf will be forced to be a very small ball
-                    sdf = sdf * (1 - ratio_factor) + sdf_manually * ratio_factor # allow limited effect of original sdf
-                    if deformation is not None:
-                        deformation = deformation * (1 - ratio_factor) + torch.zeros_like(deformation) * ratio_factor # allow limited effect of original deformation
-
+                # follow InstantMesh https://github.com/TencentARC/InstantMesh/blob/main/src/models/lrm_mesh.py
+                update_sdf = torch.zeros_like(sdf)
+                max_sdf = sdf.max()
+                min_sdf = sdf.min()
+                update_sdf[self.center_indices] += (-1 - max_sdf) # smaller than zero
+                update_sdf[self.border_indices] += (1 - min_sdf) # larger than zero
+                new_sdf = sdf + update_sdf
+                update_mask = (new_sdf == 0).float()
+                sdf = new_sdf * (1 - update_mask) + sdf * update_mask
 
             if index > 0 and self.cfg.isosurface_method == "diffmc":
                 # according to https://github.com/SarahWeiii/diso/issues/2
