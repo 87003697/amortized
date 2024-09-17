@@ -62,6 +62,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         rd_weight: float = 1.
         rd_weighting_strategy: str = "uniform" # asd is suitable for uniform weighting, but can be extended to other strategies
         rd_use_sds: bool = False
+        rd_recon_std_rescale: float = 0.
         cam_method: str = "rel_x2"  # rel_x2 or abs or rel
 
         # the following is specific to mvdream
@@ -632,14 +633,14 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         target = (mv_latents - grad).detach()
 
         if not is_dual:
-            loss_asd = 0.5 * F.mse_loss(mv_latents, target, reduction="sum") / view_batch_size 
+            loss_asd = 0.5 * F.mse_loss(mv_latents, target, reduction="sum") / self.cfg.n_view
             return loss_asd, grad.norm()
         else:
             # split the loss and grad_norm for the 1st and 2nd renderings
             loss_asd = torch.stack(
                 [
-                    0.5 * F.mse_loss(mv_latents[:view_batch_size], target[:view_batch_size], reduction="sum") / view_batch_size,
-                    0.5 * F.mse_loss(mv_latents[view_batch_size:], target[view_batch_size:], reduction="sum") / view_batch_size,
+                    0.5 * F.mse_loss(mv_latents[:view_batch_size], target[:view_batch_size], reduction="sum") / self.cfg.n_view,
+                    0.5 * F.mse_loss(mv_latents[view_batch_size:], target[view_batch_size:], reduction="sum") / self.cfg.n_view,
                 ]
             )
             grad_norm = torch.stack(
@@ -973,7 +974,38 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         )
         noise_pred_second = noise_pred_text_second
 
-        grad = (noise_pred_first - noise_pred_second) * w
+        if self.cfg.rd_recon_std_rescale > 0:
+            # gradient in the latent space
+            latents_noisy = self.rd_model.q_sample(rd_latents, t, noise=rd_noise)
+            latents_recon = self.rd_model.predict_start_from_noise(latents_noisy, t, noise_pred_first)
+            # rescale the reconstruction
+            latents_recon_nocfg = self.rd_model.predict_start_from_noise(latents_noisy, t, noise_pred_text)
+            factor = (
+                latents_recon_nocfg.view(-1,self.cfg.n_view, *latents_recon_nocfg.shape[1:]).std(dim=[1,2,3,4], keepdim=True) +
+                1e-8
+            ) / (
+                latents_recon.view(-1,self.cfg.n_view, *latents_recon.shape[1:]).std(dim=[1,2,3,4], keepdim=True) +
+                1e-8
+            )
+            latents_recon = self.cfg.rd_recon_std_rescale * (
+                latents_recon.clone() * factor.squeeze(1).repeat_interleave(self.cfg.n_view, dim=0)
+            ) + (1 - self.cfg.rd_recon_std_rescale) * latents_recon
+
+            # determine if second latent is used
+            use_t_plus = self.cfg.rd_plus_ratio > 0 and not self.cfg.rd_use_sds
+            if use_t_plus:
+                # overwrite the rd_latents with the second laten
+                latents_noisy_second = self.rd_model.q_sample(rd_latents, t_plus, noise=rd_noise)
+                latents = self.rd_model.predict_start_from_noise(latents_noisy_second, t_plus, noise_pred_second)
+            else:
+                latents = rd_latents
+
+            loss = 0.5 * F.mse_loss(latents, latents_recon, reduction="sum") / self.cfg.n_view
+            grad = torch_grad(loss, rd_latents)[0]
+        else:
+            # gradient in the noise space
+            grad = (noise_pred_first - noise_pred_second) * w
+
         grad = torch.nan_to_num(grad)
         # clip grad for stability?
         if self.grad_clip_val is not None:
@@ -982,15 +1014,16 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         # reparameterization trick
         # d(loss)/d(latents) = latents - target = latents - (latents - grad) = grad
         target = (rd_latents - grad).detach()
+
         if not is_dual:
-            loss_asd = 0.5 * F.mse_loss(rd_latents, target, reduction="sum") / view_batch_size
+            loss_asd = 0.5 * F.mse_loss(rd_latents, target, reduction="sum") / self.cfg.n_view
             return loss_asd, grad.norm()
         else:
             # split the grad into two parts
             loss_asd = torch.stack(
                 [
-                    0.5 * F.mse_loss(rd_latents[:view_batch_size], target[:view_batch_size], reduction="sum") / view_batch_size,
-                    0.5 * F.mse_loss(rd_latents[view_batch_size:], target[view_batch_size:], reduction="sum") / view_batch_size,
+                    0.5 * F.mse_loss(rd_latents[:view_batch_size], target[:view_batch_size], reduction="sum") / self.cfg.n_view,
+                    0.5 * F.mse_loss(rd_latents[view_batch_size:], target[view_batch_size:], reduction="sum") / self.cfg.n_view,
                 ]
             )
             grad_norm = torch.stack(
@@ -1338,14 +1371,14 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         # d(loss)/d(latents) = latents - target = latents - (latents - grad) = grad
         target = (sd_latents - grad).detach()
         if not is_dual:
-            loss_asd = 0.5 * F.mse_loss(sd_latents, target, reduction="sum") / view_batch_size
+            loss_asd = 0.5 * F.mse_loss(sd_latents, target, reduction="sum") #/ view_batch_size
             return loss_asd, grad.norm()
         else:
             # split the grad into two parts
             loss_asd = torch.stack(
                 [
-                    0.5 * F.mse_loss(sd_latents[:view_batch_size], target[:view_batch_size], reduction="sum") / view_batch_size,
-                    0.5 * F.mse_loss(sd_latents[view_batch_size:], target[view_batch_size:], reduction="sum") / view_batch_size,
+                    0.5 * F.mse_loss(sd_latents[:view_batch_size], target[:view_batch_size], reduction="sum"), #/ view_batch_size,
+                    0.5 * F.mse_loss(sd_latents[view_batch_size:], target[view_batch_size:], reduction="sum"), #/ view_batch_size,
                 ]
             )
             grad_norm = torch.stack(
