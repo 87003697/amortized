@@ -292,7 +292,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 geo_out = self.geometry(
                     positions[None, ...],
                     space_cache_slice,
-                    output_normal= False, #self.training, # only output normal and related info during training
+                    output_normal= self.training, # only output normal and related info during training
                 )
 
                 extra_geo_info = {}
@@ -311,7 +311,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
 
                 # add sdf values for computing loss
                 if "sdf_grad" in geo_out:
-                    if "sdf" in geo_out:
+                    if "sdf_grad" in out:
                         out["sdf_grad"].extend(
                             geo_out["sdf_grad"]
                         )
