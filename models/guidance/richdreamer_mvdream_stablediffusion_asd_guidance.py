@@ -129,7 +129,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
     def configure(self) -> None:
 
         ################################################################################################
-        if self.cfg.rd_weight > 0:
+        if True:
             threestudio.info(f"Loading RichDreamer ...")
             rd_model, rd_cfg = build_model_rd(
                 self.cfg.rd_model_name_or_path,
@@ -155,7 +155,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
             threestudio.info("Stable Diffusion is disabled.")
 
         ################################################################################################
-        if self.cfg.mv_weight > 0:
+        if True:
             threestudio.info(f"Loading Multiview Diffusion ...")
 
             self.mv_model = build_model_mv(
@@ -174,7 +174,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         else:
             threestudio.info("Multiview Diffusion is disabled.")
         ################################################################################################
-        if self.cfg.sd_weight > 0:
+        if True:
             threestudio.info(f"Loading Stable Diffusion ...")
 
             self.weights_dtype = (
@@ -1506,7 +1506,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
 
         ################################################################################################
         # the following is specific to MVDream
-        if self.cfg.mv_weight > 0:
+        if self.mv_weight > 0:
             loss_mv, grad_mv = self.mv_grad_asd(
                 rgb,
                 prompt_utils,
@@ -1542,7 +1542,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 f"Unknown camera method: {self.cfg.cam_method}"
             )
         
-        if self.cfg.rd_weight > 0:
+        if self.rd_weight > 0:
             loss_rd, grad_rd = self.rd_grad_asd(
                 rgb,
                 normal,
@@ -1588,7 +1588,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 )
                 idx_2nd += torch.arange(0, rgb_2nd.shape[0], self.cfg.n_view, device=self.device, dtype=torch.long)
                 
-        if self.cfg.sd_weight > 0:
+        if self.sd_weight > 0:
             loss_sd, grad_sd = self.sd_grad_asd(
                 rgb[idx],
                 prompt_utils,
@@ -1615,8 +1615,8 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         # return the loss and grad_norm
         if not is_dual:
             return {
-                "loss_asd": self.cfg.rd_weight * loss_rd + self.cfg.mv_weight * loss_mv + self.cfg.sd_weight * loss_sd,
-                "grad_norm_asd": self.cfg.rd_weight * grad_rd + self.cfg.mv_weight * grad_mv + self.cfg.sd_weight * grad_sd,
+                "loss_asd": self.rd_weight * loss_rd + self.mv_weight * loss_mv + self.sd_weight * loss_sd,
+                "grad_norm_asd": self.rd_weight * grad_rd + self.mv_weight * grad_mv + self.sd_weight * grad_sd,
                 # "min_step": self.min_step,
                 # "max_step": self.max_step,
             }
@@ -1625,12 +1625,12 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
             loss = 0
             grad_norm = 0
 
-            loss += self.cfg.rd_weight * loss_rd[0]
-            grad_norm += self.cfg.rd_weight * grad_rd[0]
-            loss += self.cfg.mv_weight * loss_mv[0]
-            grad_norm += self.cfg.mv_weight * loss_mv[0]
-            loss += self.cfg.sd_weight * loss_sd[0]
-            grad_norm += self.cfg.sd_weight * loss_sd[0]
+            loss += self.rd_weight * loss_rd[0]
+            grad_norm += self.rd_weight * grad_rd[0]
+            loss += self.mv_weight * loss_mv[0]
+            grad_norm += self.mv_weight * loss_mv[0]
+            loss += self.sd_weight * loss_sd[0]
+            grad_norm += self.sd_weight * loss_sd[0]
 
             guidance_1st =  {
                 "loss_asd": loss,
@@ -1641,12 +1641,12 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
             loss = 0
             grad_norm = 0
 
-            loss += self.cfg.rd_weight * loss_rd[1]
-            grad_norm += self.cfg.rd_weight * grad_rd[1]
-            loss += self.cfg.mv_weight * loss_mv[1]
-            grad_norm += self.cfg.mv_weight * grad_mv[1]
-            loss += self.cfg.sd_weight * loss_sd[1]
-            grad_norm += self.cfg.sd_weight * loss_sd[1]
+            loss += self.rd_weight * loss_rd[1]
+            grad_norm += self.rd_weight * grad_rd[1]
+            loss += self.mv_weight * loss_mv[1]
+            grad_norm += self.mv_weight * grad_mv[1]
+            loss += self.sd_weight * loss_sd[1]
+            grad_norm += self.sd_weight * loss_sd[1]
                                                
             guidance_2nd =  {
                 "loss_asd": loss,
@@ -1662,6 +1662,11 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         # http://arxiv.org/abs/2303.15413
         if self.cfg.grad_clip is not None:
             self.grad_clip_val = C(self.cfg.grad_clip, epoch, global_step)
+        
+        # update the weights
+        self.sd_weight = C(self.cfg.sd_weight, epoch, global_step)
+        self.rd_weight = C(self.cfg.rd_weight, epoch, global_step)
+        self.mv_weight = C(self.cfg.mv_weight, epoch, global_step)
 
         self.set_min_max_steps(
             min_step_percent=C(self.cfg.min_step_percent, epoch, global_step),
