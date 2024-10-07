@@ -15,7 +15,7 @@ from threestudio.models.materials.base import BaseMaterial
 
 from threestudio.models.renderers.nvdiff_rasterizer import NVDiffRasterizer
 
-from threestudio.utils.misc import get_device
+from threestudio.utils.misc import get_device, C
 from threestudio.utils.rasterize import NVDiffRasterizerContext
 from threestudio.utils.typing import *
 from threestudio.models.mesh import Mesh
@@ -96,8 +96,6 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         v[:, :2, :] = True; v[:, -2:, :] = True
         v[:, :, :2] = True; v[:, :, -2:] = True
         self.border_indices = torch.nonzero(v.reshape(-1)).to(self.device)
-
-
 
 
     def forward(
@@ -382,7 +380,9 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
     def update_step(
         self, epoch: int, global_step: int, on_load_weights: bool = False
     ) -> None:
-        pass
+        self.sdf_grad_shrink = C(
+            self.cfg.sdf_grad_shrink, epoch, global_step
+        )
 
     def isosurface(self, space_cache: Float[Tensor, "B ..."]) -> List[Mesh]:
 
@@ -411,8 +411,8 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         )
 
         # change the gradient of the sdf
-        sdf_batch = self.cfg.sdf_grad_shrink * sdf_batch + (1 - self.cfg.sdf_grad_shrink) * sdf_batch.detach()
-        deformation_batch = self.cfg.sdf_grad_shrink * deformation_batch + (1 - self.cfg.sdf_grad_shrink) * deformation_batch.detach() if deformation_batch is not None else None
+        sdf_batch = self.sdf_grad_shrink * sdf_batch + (1 - self.sdf_grad_shrink) * sdf_batch.detach()
+        deformation_batch = self.sdf_grad_shrink * deformation_batch + (1 - self.sdf_grad_shrink) * deformation_batch.detach() if deformation_batch is not None else None
 
         # get the isosurface
         mesh_list = []
