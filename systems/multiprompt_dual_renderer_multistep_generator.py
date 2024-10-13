@@ -76,6 +76,8 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         num_steps_training: int = 50
         num_steps_sampling: int = 50
 
+        timesteps_from_T: bool = True
+
         
         sample_scheduler: str = "ddpm" #any of "ddpm", "ddim"
         noise_scheduler: str = "ddim"
@@ -278,9 +280,12 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
     ):
         scheduler.set_timesteps(num_steps)
         timesteps_orig = scheduler.timesteps
-        timesteps_delta = scheduler.config.num_train_timesteps - 1 - timesteps_orig.max() 
-        timesteps = timesteps_orig + timesteps_delta
-        return timesteps
+        if self.cfg.timesteps_from_T:
+            timesteps_delta = scheduler.config.num_train_timesteps - 1 - timesteps_orig.max() 
+            timesteps = timesteps_orig + timesteps_delta
+            return timesteps
+        else:
+            return timesteps_orig
 
 
     def diffusion_reverse(
