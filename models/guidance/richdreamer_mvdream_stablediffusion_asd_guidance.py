@@ -129,7 +129,9 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
     def configure(self) -> None:
 
         ################################################################################################
-        if type(self.cfg.sd_weight) in [float, int] and self.cfg.sd_weight != 0:
+        if type(self.cfg.sd_weight) in [float, int] and self.cfg.sd_weight == 0:
+            threestudio.info("Stable Diffusion is disabled.")
+        else:
             threestudio.info(f"Loading RichDreamer ...")
             rd_model, rd_cfg = build_model_rd(
                 self.cfg.rd_model_name_or_path,
@@ -151,12 +153,11 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 del self.rd_model.cond_stage_model # text encoder
                 cleanup()
 
-        else:
-            threestudio.info("Stable Diffusion is disabled.")
-
         ################################################################################################
-        if type(self.cfg.mv_weight) in [float, int] and self.cfg.mv_weight != 0:
-            threestudio.info(f"Loading Multiview Diffusion ...")
+        if type(self.cfg.mv_weight) in [float, int] and self.cfg.mv_weight == 0:
+            threestudio.info("MVDream is disabled.")
+        else:
+            threestudio.info(f"Loading MVDream ...")
 
             self.mv_model = build_model_mv(
                 self.cfg.mv_model_name_or_path,
@@ -169,11 +170,12 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 # delete unused models
                 del self.mv_model.cond_stage_model # text encoder
                 cleanup()
-        else:
-            threestudio.info("Multiview Diffusion is disabled.")
+
         ################################################################################################
-        if type(self.cfg.rd_weight) in [float, int] and self.cfg.rd_weight != 0:
-            threestudio.info(f"Loading Stable Diffusion ...")
+        if type(self.cfg.rd_weight) in [float, int] and self.cfg.rd_weight == 0:
+            threestudio.info(f"RichDreamer is disabled")
+        else:
+            threestudio.info(f"Loading RichDreamer ...")
 
             self.weights_dtype = (
                 torch.float16 if self.cfg.half_precision_weights else torch.float32
