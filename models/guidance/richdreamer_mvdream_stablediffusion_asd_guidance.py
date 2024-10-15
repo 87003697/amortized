@@ -176,39 +176,25 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
             threestudio.info(f"RichDreamer is disabled")
         else:
             threestudio.info(f"Loading RichDreamer ...")
-
-            self.weights_dtype = (
-                torch.float16 if self.cfg.half_precision_weights else torch.float32
+            rd_model, rd_cfg = build_model_rd(
+                self.cfg.rd_model_name_or_path,
+                ckpt_path=self.cfg.rd_ckpt_path,
+                return_cfg=True,
+                strict=False,
             )
-
-            pipe_kwargs = {
-                "tokenizer": None,
-                "safety_checker": None,
-                "feature_extractor": None,
-                "requires_safety_checker": False,
-                "torch_dtype": self.weights_dtype,
-            }
-            pipe = StableDiffusionPipeline.from_pretrained(
-                self.cfg.sd_model_name_or_path,
-                **pipe_kwargs,
-            ).to(self.device)
-            del pipe.text_encoder
-            cleanup()
-
-            # Create model
-            self.sd_vae = pipe.vae.eval().to(self.device)
-            self.sd_unet = pipe.unet.eval().to(self.device)
-
-            for p in self.sd_vae.parameters():
-                p.requires_grad_(False)
-            for p in self.sd_unet.parameters():
+            self.rd_model = rd_model.to(self.device)
+            for p in self.rd_model.parameters():
                 p.requires_grad_(False)
 
-            self.sd_scheduler = DDPMScheduler.from_pretrained(
-                self.cfg.sd_model_name_or_path,
-                subfolder="scheduler",
-                torch_dtype=self.weights_dtype,
+            self.rd_cond_method = (
+                rd_cfg.model.params.cond_method
+                if hasattr(rd_cfg.model.params, "cond_method")
+                else "ori"
             )
+            if hasattr(self.rd_model, "cond_stage_model"):
+                # delete unused models
+                del self.rd_model.cond_stage_model # text encoder
+                cleanup()
 
         ################################################################################################
         # the folowing is shared between mvdream and stable diffusion
