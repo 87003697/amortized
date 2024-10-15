@@ -129,7 +129,6 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
     def configure(self) -> None:
 
         ################################################################################################
-        import pdb; pdb.set_trace()
         if type(self.cfg.sd_weight) in [float, int] and self.cfg.sd_weight == 0:
             threestudio.info(f"Loading RichDreamer ...")
             rd_model, rd_cfg = build_model_rd(
