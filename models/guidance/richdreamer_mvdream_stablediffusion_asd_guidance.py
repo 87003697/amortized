@@ -129,7 +129,8 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
     def configure(self) -> None:
 
         ################################################################################################
-        if True:
+        import pdb; pdb.set_trace()
+        if type(self.cfg.sd_weight) in [float, int] and self.cfg.sd_weight == 0:
             threestudio.info(f"Loading RichDreamer ...")
             rd_model, rd_cfg = build_model_rd(
                 self.cfg.rd_model_name_or_path,
@@ -155,7 +156,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
             threestudio.info("Stable Diffusion is disabled.")
 
         ################################################################################################
-        if True:
+        if type(self.cfg.mv_weight) in [float, int] and self.cfg.mv_weight == 0:
             threestudio.info(f"Loading Multiview Diffusion ...")
 
             self.mv_model = build_model_mv(
@@ -174,7 +175,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         else:
             threestudio.info("Multiview Diffusion is disabled.")
         ################################################################################################
-        if True:
+        if type(self.cfg.rd_weight) in [float, int] and self.cfg.rd_weight == 0:
             threestudio.info(f"Loading Stable Diffusion ...")
 
             self.weights_dtype = (
