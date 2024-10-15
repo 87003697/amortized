@@ -154,7 +154,6 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         else:
             threestudio.info("Stable Diffusion is disabled.")
 
-        import pdb; pdb.set_trace()
         ################################################################################################
         if type(self.cfg.mv_weight) in [float, int] and self.cfg.mv_weight != 0:
             threestudio.info(f"Loading Multiview Diffusion ...")
