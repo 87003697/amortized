@@ -806,7 +806,7 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
             self.vae.enable_gradient_checkpointing()
 
         if self.cfg.prompt_bias:
-            self.prompt_bias = nn.Parameter(torch.zeros(3, 77, 1024))
+            self.prompt_bias = nn.Parameter(torch.zeros(self.num_planes, 77, 1024))
 
     @property
     def unet(self):
