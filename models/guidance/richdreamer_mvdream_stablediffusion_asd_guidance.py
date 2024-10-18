@@ -57,6 +57,8 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         n_view: int = 4
 
         # the following is specific to richdreamer
+        rd_min_step_percent: Optional[float] = None
+        rd_max_step_percent: Optional[float] = None
         rd_image_size: int = 32
         rd_guidance_scale: float = 7.5
         rd_weight: float = 1.
@@ -66,6 +68,8 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         cam_method: str = "rel_x2"  # rel_x2 or abs or rel
 
         # the following is specific to mvdream
+        mv_min_step_percent: Optional[float] = None
+        mv_max_step_percent: Optional[float] = None
         mv_camera_condition_type: str = "rotation"
         mv_image_size: int = 256
         mv_guidance_scale: float = 7.5
@@ -73,6 +77,8 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         mv_weighting_strategy: str = "uniform" # asd is suitable for uniform weighting, but can be extended to other strategies
 
         # the following is specific to stable diffusion
+        sd_min_step_percent: Optional[float] = None
+        sd_max_step_percent: Optional[float] = None
         sd_all_views: bool = False
         sd_image_size: int = 512
         sd_guidance_scale: float = 7.5
@@ -85,9 +91,11 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         ] = None  # field(default_factory=lambda: [0, 2.0, 8.0, 1000])
         half_precision_weights: bool = True
 
-        # the following is specific to asd
-        min_step_percent: float = 0.02
         max_step_percent: float = 0.98
+        min_step_percent: float = 0.02
+
+        
+
 
         plus_schedule: str = "linear"  # linear or sqrt_<bias>
 
@@ -106,24 +114,6 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
 
     cfg: Config
 
-    @torch.cuda.amp.autocast(enabled=False)
-    def set_min_max_steps(self, min_step_percent=0.02, max_step_percent=0.98):
-        self.min_step = int(self.num_train_timesteps * min_step_percent)
-        self.max_step = int(self.num_train_timesteps * max_step_percent)
-
-    def adapt_timestep_range(self, timestep_range: Optional[Tuple[float, float]]):
-        # determine the timestamp
-        if timestep_range is None:
-            min_t = self.min_step
-            max_t = self.max_step
-        else:
-            assert len(timestep_range) == 2
-            min_t_ratio, max_t_ratio = timestep_range
-            max_t = int(max_t_ratio * (self.max_step - self.min_step) + self.min_step)
-            max_t = max(min(max_t, self.max_step), self.min_step) # clip the value
-            min_t = int(min_t_ratio * (self.max_step - self.min_step) + self.min_step)
-            min_t = max(min(min_t, self.max_step), self.min_step) # clip the value
-        return min_t, max_t
 
 
     def configure(self) -> None:
@@ -215,7 +205,6 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         self.alphas = self.mv_model.alphas_cumprod if hasattr(self, "mv_model") else self.rd_model.alphas_cumprod
         self.grad_clip_val: Optional[float] = None
         self.num_train_timesteps = 1000
-        self.set_min_max_steps()  # set to default value
 
 
     def get_t_plus(
@@ -223,17 +212,24 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         t: Float[Tensor, "B"],
         module: str # "rd" or "mv"
     ):
+
         
         # determine the attributes that differ between rd and MV
         if module == "rd":
             plus_random = self.cfg.rd_plus_random
             plus_ratio = self.cfg.rd_plus_ratio
+            min_step = self.rd_min_step
+            max_step = self.rd_max_step
         elif module == "mv":
             plus_random = self.cfg.mv_plus_random
             plus_ratio = self.cfg.mv_plus_ratio
+            min_step = self.mv_min_step
+            max_step = self.mv_max_step
         elif module == "sd":
             plus_random = self.cfg.sd_plus_random
             plus_ratio = self.cfg.sd_plus_ratio
+            min_step = self.sd_min_step
+            max_step = self.sd_max_step
         else:
             raise ValueError(f"Invalid module: {module}")
 
@@ -241,7 +237,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         if self.cfg.plus_schedule == "linear":
 
             if self.cfg.t_plus_type in ["v1", "v2"]:
-                t_plus = plus_ratio * (t - self.min_step)
+                t_plus = plus_ratio * (t - min_step)
             elif self.cfg.t_plus_type in ["v3", "v4"]:
                 t_plus = plus_ratio * t
             else:
@@ -255,7 +251,6 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 except:
                     raise ValueError(f"Invalid sqrt bias: {self.cfg.plus_schedule}")
                 
-            # t_plus = plus_ratio * torch.sqrt(t - self.min_step + bias)
             t_plus = plus_ratio * torch.sqrt(t + bias)
         else:
             raise ValueError(f"Invalid plus_schedule: {self.cfg.plus_schedule}")
@@ -571,10 +566,9 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
             dim=0
         )
 
-        assert self.min_step is not None and self.max_step is not None
         with torch.no_grad():
 
-            min_t, max_t = self.adapt_timestep_range(timestep_range)
+            min_t, max_t = self.mv_min_step, self.mv_max_step
             _t = torch.randint(
                 min_t,
                 max_t,
@@ -922,9 +916,8 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
             view_batch_size // text_batch_size, dim = 0
         )
 
-        assert self.min_step is not None and self.max_step is not None
         with torch.no_grad():
-            min_t, max_t = self.adapt_timestep_range(timestep_range)
+            min_t, max_t = self.rd_min_step, self.rd_max_step
             _t = torch.randint(
                 min_t,
                 max_t,
@@ -1315,9 +1308,8 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
             view_batch_size // text_batch_size, dim = 0
         )
 
-        assert self.min_step is not None and self.max_step is not None
         with torch.no_grad():
-            min_t, max_t = self.adapt_timestep_range(timestep_range)
+            min_t, max_t = self.sd_min_step, self.sd_max_step
             t = torch.randint(
                 min_t,
                 max_t,
@@ -1617,8 +1609,6 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
             return {
                 "loss_asd": self.rd_weight * loss_rd + self.mv_weight * loss_mv + self.sd_weight * loss_sd,
                 "grad_norm_asd": self.rd_weight * grad_rd + self.mv_weight * grad_mv + self.sd_weight * grad_sd,
-                # "min_step": self.min_step,
-                # "max_step": self.max_step,
             }
         else:
             # return the loss and grad_norm for the 1st renderings
@@ -1663,12 +1653,26 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         if self.cfg.grad_clip is not None:
             self.grad_clip_val = C(self.cfg.grad_clip, epoch, global_step)
         
-        # update the weights
-        self.sd_weight = C(self.cfg.sd_weight, epoch, global_step)
-        self.rd_weight = C(self.cfg.rd_weight, epoch, global_step)
-        self.mv_weight = C(self.cfg.mv_weight, epoch, global_step)
 
-        self.set_min_max_steps(
-            min_step_percent=C(self.cfg.min_step_percent, epoch, global_step),
-            max_step_percent=C(self.cfg.max_step_percent, epoch, global_step),
-        )
+        # update the weights and min/max step for each module ################################################################################################
+        max_step = int(self.num_train_timesteps * C(self.cfg.max_step_percent, epoch, global_step))
+        min_step = int(self.num_train_timesteps * C(self.cfg.min_step_percent, epoch, global_step))
+
+        # stable diffusion
+        self.sd_weight = C(self.cfg.sd_weight, epoch, global_step)
+        self.sd_min_step = int(self.num_train_timesteps * C(self.cfg.sd_min_step_percent, epoch, global_step)) \
+            if self.cfg.sd_min_step_percent is not None else min_step
+        self.sd_max_step = int(self.num_train_timesteps * C(self.cfg.sd_max_step_percent, epoch, global_step)) \
+            if self.cfg.sd_max_step_percent is not None else max_step
+        # rich dreamer
+        self.rd_weight = C(self.cfg.rd_weight, epoch, global_step)
+        self.rd_min_step = int(self.num_train_timesteps * C(self.cfg.rd_min_step_percent, epoch, global_step)) \
+            if self.cfg.rd_min_step_percent is not None else min_step
+        self.rd_max_step = int(self.num_train_timesteps * C(self.cfg.rd_max_step_percent, epoch, global_step)) \
+            if self.cfg.rd_max_step_percent is not None else max_step
+        # mvdream
+        self.mv_weight = C(self.cfg.mv_weight, epoch, global_step)
+        self.mv_min_step = int(self.num_train_timesteps * C(self.cfg.mv_min_step_percent, epoch, global_step)) \
+            if self.cfg.mv_min_step_percent is not None else min_step
+        self.mv_max_step = int(self.num_train_timesteps * C(self.cfg.mv_max_step_percent, epoch, global_step)) \
+            if self.cfg.mv_max_step_percent is not None else max_step
