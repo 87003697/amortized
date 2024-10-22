@@ -22,6 +22,8 @@ from diffusers import (
     DDIMScheduler,
 )
 
+from functools import partial
+
 
 def sample_timesteps(
     all_timesteps: List,
@@ -548,7 +550,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         if self.cfg.visualize_samples:
             raise NotImplementedError
 
-    def test_step(self, batch, batch_idx):
+    def test_step(self, batch, batch_idx, return_space_cache = False, render_images = True):
 
         # prepare the text embeddings as input
         prompt_utils = batch["condition_utils"] if "condition_utils" in batch else batch["prompt_utils"]
@@ -560,13 +562,17 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             batch["text_embed_bg"] = prompt_utils.get_global_text_embeddings(use_local_text_embeddings = False)
     
         batch["space_cache"] = self.diffusion_reverse(batch)
-        out, out_2nd = self.forward_rendering(batch)
 
-        batch_size = out['comp_rgb'].shape[0]
+        if render_images:
+            out, out_2nd = self.forward_rendering(batch)
+            batch_size = out['comp_rgb'].shape[0]
 
-        for batch_idx in tqdm(range(batch_size), desc="Saving test images"):
-            self._save_image_grid(batch, batch_idx, out, phase="test", render="1st")
-            self._save_image_grid(batch, batch_idx, out_2nd, phase="test", render="2nd")
+            for batch_idx in tqdm(range(batch_size), desc="Saving test images"):
+                self._save_image_grid(batch, batch_idx, out, phase="test", render="1st")
+                self._save_image_grid(batch, batch_idx, out_2nd, phase="test", render="2nd")
+
+        if return_space_cache:
+            return batch["space_cache"]
 
     def _compute_loss(
         self,
@@ -908,3 +914,34 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                             step=self.true_global_step,
                             # multithreaded=True,
                         )
+
+
+    def on_predict_start(self) -> None:
+        self.exporter: Exporter = threestudio.find(self.cfg.exporter_type)(
+            self.cfg.exporter,
+            geometry=self.geometry,
+            material=self.material,
+            background=self.background,
+        )
+
+    def predict_step(self, batch, batch_idx):
+        space_cache = self.test_step(batch, batch_idx, render_images=self.exporter.cfg.save_video, return_space_cache=True)
+        # update the space_cache into the exporter
+        exporter_output: List[ExporterOutput] = self.exporter(space_cache)
+
+        # specify the name
+        if "name" in batch:
+            name = batch['name'][0].replace(',', '').replace('.', '').replace(' ', '_')
+        else:
+            name = batch['prompt'][0].replace(',', '').replace('.', '').replace(' ', '_')
+
+        for out in exporter_output:
+            save_func_name = f"save_{out.save_type}"
+            if not hasattr(self, save_func_name):
+                raise ValueError(f"{save_func_name} not supported by the SaverMixin")
+            save_func = getattr(self, save_func_name)
+            save_func(f"it{self.true_global_step}-export/{name}/{out.save_name}", **out.params)
+
+    def on_predict_epoch_end(self) -> None:
+        if self.exporter.cfg.save_video:
+            self.on_test_epoch_end()

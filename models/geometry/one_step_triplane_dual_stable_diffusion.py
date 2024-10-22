@@ -376,10 +376,16 @@ class StableDiffusionTriplaneDualAttention(BaseImplicitGeometry):
         points: Float[Tensor, "*N Di"], 
         space_cache: Float[Tensor, "B 3 C//3 H W"],
     **kwargs) -> Dict[str, Any]:
+    
         # TODO: is this function correct?
         out: Dict[str, Any] = {}
         if self.cfg.n_feature_dims == 0:
             return out
+
+        orig_shape = points.shape
+        points = points.view(1, -1, 3)
+
+        # assume the batch size is 1
         points_unscaled = points
         points = self.rescale_points(points)
 
@@ -390,7 +396,7 @@ class StableDiffusionTriplaneDualAttention(BaseImplicitGeometry):
         )
         out.update(
             {
-                "features": features,
+                "features": features.view(orig_shape[:-1] + (self.cfg.n_feature_dims,)) 
             }
         )
         return out
@@ -403,10 +409,6 @@ class StableDiffusionTriplaneDualAttention(BaseImplicitGeometry):
                 self.finite_difference_normal_eps = (
                     self.cfg.finite_difference_normal_eps
                 )
-        # else:
-        #     raise NotImplementedError(
-        #         f"normal_type == {self.cfg.normal_type} is not implemented yet."
-        #     )
 
     def train(self, mode=True):
         super().train(mode)
