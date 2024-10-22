@@ -391,10 +391,15 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
         points: Float[Tensor, "*N Di"], 
         space_cache: Float[Tensor, "B 3 C//3 H W"],
     **kwargs) -> Dict[str, Any]:
-        # TODO: is this function correct?
+    
         out: Dict[str, Any] = {}
         if self.cfg.n_feature_dims == 0:
             return out
+
+        # assume the batch size is 1
+        orig_shape = points.shape
+        points = points.view(1, -1, 3)
+
         points_unscaled = points
         points = self.rescale_points(points)
 
@@ -405,7 +410,7 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
         )
         out.update(
             {
-                "features": features,
+                "features": features.view(orig_shape[:-1] + (self.cfg.n_feature_dims,)) 
             }
         )
         return out
@@ -430,3 +435,93 @@ class StableDiffusionTriplaneAttention(BaseImplicitGeometry):
     def eval(self):
         super().eval()
         self.space_generator.eval()
+
+    # def _isosurface(
+    #         self, 
+    #         bbox: Float[Tensor, "2 3"], 
+    #         space_cache: Float[Tensor, "B 3 C//3 H W"],
+    #     ) -> Mesh:
+    #     def batch_func(x):
+    #         # scale to bbox as the input vertices are in [0, 1]
+    #         field, deformation = self.forward_field(
+    #             scale_tensor(
+    #                 x.to(bbox.device), self.isosurface_helper.points_range, bbox
+    #             ),
+    #             space_cache,
+    #         )
+    #         field = field.to(
+    #             x.device
+    #         )  # move to the same device as the input (could be CPU)
+    #         if deformation is not None:
+    #             deformation = deformation.to(x.device)
+    #         return field, deformation
+
+    #     import pdb; pdb.set_trace()
+    #     assert self.isosurface_helper is not None
+
+    #     field, deformation = chunk_batch(
+    #         batch_func,
+    #         self.cfg.isosurface_chunk,
+    #         self.isosurface_helper.grid_vertices,
+    #     )
+
+    #     threshold: float
+
+    #     if isinstance(self.cfg.isosurface_threshold, float):
+    #         threshold = self.cfg.isosurface_threshold
+    #     elif self.cfg.isosurface_threshold == "auto":
+    #         eps = 1.0e-5
+    #         threshold = field[field > eps].mean().item()
+    #         threestudio.info(
+    #             f"Automatically determined isosurface threshold: {threshold}"
+    #         )
+    #     else:
+    #         raise TypeError(
+    #             f"Unknown isosurface_threshold {self.cfg.isosurface_threshold}"
+    #         )
+
+    #     level = self.forward_level(field, threshold)
+    #     mesh: Mesh = self.isosurface_helper(level, deformation=deformation)
+    #     mesh.v_pos = scale_tensor(
+    #         mesh.v_pos, self.isosurface_helper.points_range, bbox
+    #     )  # scale to bbox as the grid vertices are in [0, 1]
+    #     mesh.add_extra("bbox", bbox)
+
+    #     if self.cfg.isosurface_remove_outliers:
+    #         # remove outliers components with small number of faces
+    #         # only enabled when the mesh is not differentiable
+    #         mesh = mesh.remove_outlier(self.cfg.isosurface_outlier_n_faces_threshold)
+
+    #     return mesh
+
+    # def isosurface(
+    #         self,
+    #         space_cache: Float[Tensor, "B 3 C//3 H W"],
+    #     ) -> Mesh:
+    #     if not self.cfg.isosurface:
+    #         raise NotImplementedError(
+    #             "Isosurface is not enabled in the current configuration"
+    #         )
+    #     import pdb; pdb.set_trace()
+    #     self._initilize_isosurface_helper()
+    #     if self.cfg.isosurface_coarse_to_fine:
+    #         threestudio.debug("First run isosurface to get a tight bounding box ...")
+    #         with torch.no_grad():
+    #             mesh_coarse = self._isosurface(
+    #                 self.bbox, 
+    #                 space_cache
+    #             )
+    #         vmin, vmax = mesh_coarse.v_pos.amin(dim=0), mesh_coarse.v_pos.amax(dim=0)
+    #         vmin_ = (vmin - (vmax - vmin) * 0.1).max(self.bbox[0])
+    #         vmax_ = (vmax + (vmax - vmin) * 0.1).min(self.bbox[1])
+    #         threestudio.debug("Run isosurface again with the tight bounding box ...")
+    #         mesh = self._isosurface(
+    #                 torch.stack([vmin_, vmax_], dim=0),
+    #                 space_cache
+    #             )
+    #     else:
+    #         mesh = self._isosurface(
+    #             self.bbox,
+    #             space_cache
+    #         )
+    #     return mesh
