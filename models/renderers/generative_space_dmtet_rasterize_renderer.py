@@ -50,6 +50,8 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         # sdf forcing strategy for generative space
         sdf_grad_shrink: float = 1.
 
+        allow_empty_flag: bool = True
+
     cfg: Config
 
     def configure(
@@ -416,7 +418,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             deformation_batch = self.sdf_grad_shrink * deformation_batch + (1 - self.sdf_grad_shrink) * deformation_batch.detach() if deformation_batch is not None else None
         else: # save memory
             sdf_batch = sdf_batch.detach()
-            deformation_batch = deformation_batch.detach() if deformation_batch is not None else None
+            deformation_batch = self.sdf_grad_shrink * deformation_batch + (1 - self.sdf_grad_shrink) * deformation_batch.detach() if deformation_batch is not None else None
 
         # get the isosurface
         mesh_list = []
@@ -435,7 +437,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             # special case when all sdf values are positive or negative, thus no isosurface
             if torch.all(sdf > 0) or torch.all(sdf < 0):
                 threestudio.info("All sdf values are positive or negative, no isosurface")
-                self.empty_flag = True # special operation, set to detach the gradient from wrong isosurface
+                self.empty_flag = self.cfg.allow_empty_flag # special operation, set to detach the gradient from wrong isosurface
 
                 # attempt 1
                 # # if no sdf with 0, manually add 5% to be 0
