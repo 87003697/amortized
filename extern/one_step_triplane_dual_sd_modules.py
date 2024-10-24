@@ -187,7 +187,7 @@ class TriplaneLoRAConv2dLayer(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         orig_dtype = hidden_states.dtype
-        dtype = self.down_xy.weight.dtype if "hexa" in self.locon_type else self.down.weight.dtype
+        dtype = self.down_xy_geo.weight.dtype if "hexa" in self.locon_type else self.down.weight.dtype
 
         if "hexa" in self.locon_type:
             # xy plane
@@ -195,7 +195,7 @@ class TriplaneLoRAConv2dLayer(nn.Module):
             hidden_states_xy_tex = self.up_xy_tex(self.down_xy_tex(hidden_states[3::6].to(dtype)))
 
             lora_hidden_states = torch.concat(
-                [torch.zeros_like(hidden_states_xz_tex)] * 6,
+                [torch.zeros_like(hidden_states_xy_tex)] * 6,
                 dim=0
             )
 
