@@ -596,27 +596,41 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 is_dual=is_dual,
             )
 
-        # determine the weight
-        if self.cfg.mv_weighting_strategy == "sds":
-            # w(t), sigma_t^2
-            w = (1 - self.alphas[t]).view(-1, 1, 1, 1)
-        elif self.cfg.mv_weighting_strategy == "uniform":
-            w = 1
-        elif self.cfg.mv_weighting_strategy == "fantasia3d":
-            w = (self.alphas[t] ** 0.5 * (1 - self.alphas[t])).view(-1, 1, 1, 1)
-        elif self.cfg.mv_weighting_strategy == "sds_sqrt":
-            w = ((1 - self.alphas[t]) ** 0.5).view(-1, 1, 1, 1)
-        else:
-            raise ValueError(
-                f"Unknown weighting strategy: {self.cfg.mv_weighting_strategy}"
-            )
-
         noise_pred_first = noise_pred_uncond + self.cfg.mv_guidance_scale * (
             noise_pred_text - noise_pred_uncond
         )
         noise_pred_second = noise_pred_text_second
 
-        grad = (noise_pred_first - noise_pred_second) * w
+        # determine the weight
+        if self.cfg.mv_weighting_strategy in ["sds", "uniform", "fantasia3d", "sds_sqrt"]:
+            if self.cfg.mv_weighting_strategy == "sds":
+                # w(t), sigma_t^2
+                w = (1 - self.alphas[t]).view(-1, 1, 1, 1)
+            elif self.cfg.mv_weighting_strategy == "uniform":
+                w = 1
+            elif self.cfg.mv_weighting_strategy == "fantasia3d":
+                w = (self.alphas[t] ** 0.5 * (1 - self.alphas[t])).view(-1, 1, 1, 1)
+            elif self.cfg.mv_weighting_strategy == "sds_sqrt":
+                w = ((1 - self.alphas[t]) ** 0.5).view(-1, 1, 1, 1)
+
+            grad = (noise_pred_first - noise_pred_second) * w
+
+        elif self.cfg.mv_weighting_strategy == "dmd":
+            # epe to mu
+            with torch.no_grad():
+                alpha = (self.alphas[t] ** 0.5).view(-1, 1, 1, 1)
+                sigma = ((1 - self.alphas[t]) ** 0.5).view(-1, 1, 1, 1)
+                latent_first = (mv_latents - sigma * noise_pred_first) / alpha
+                latent_second = (mv_latents - sigma * noise_pred_second) / alpha
+            
+                w = torch.abs(mv_latents - latent_first).mean(dim=(1, 2, 3), keepdim=True)
+                grad = (latent_second - latent_first) / (w + 1e-6) # avoid zero division
+
+        else:
+            raise ValueError(
+                f"Unknown weighting strategy: {self.cfg.mv_weighting_strategy}"
+            )
+
         grad = torch.nan_to_num(grad)
         # clip grad for stability?
         if self.grad_clip_val is not None:
@@ -946,58 +960,70 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 is_dual=is_dual,
             )
 
+            noise_pred_first = noise_pred_uncond + self.cfg.rd_guidance_scale * (
+                noise_pred_text - noise_pred_uncond
+            )
+            noise_pred_second = noise_pred_text_second
 
-        # determine the weight
-        if self.cfg.rd_weighting_strategy == "sds":
-            # w(t), sigma_t^2
-            w = (1 - self.alphas[t]).view(-1, 1, 1, 1)
-        elif self.cfg.rd_weighting_strategy == "uniform":
-            w = 1
-        elif self.cfg.rd_weighting_strategy == "fantasia3d":
-            w = (self.alphas[t] ** 0.5 * (1 - self.alphas[t])).view(-1, 1, 1, 1)
-        elif self.cfg.rd_weighting_strategy == "sds_sqrt":
-            w = ((1 - self.alphas[t]) ** 0.5).view(-1, 1, 1, 1)
+        if self.cfg.rd_weighting_strategy in ["sds", "uniform", "fantasia3d", "sds_sqrt"]:
+            # determine the weight
+            if self.cfg.rd_weighting_strategy == "sds":
+                # w(t), sigma_t^2
+                w = (1 - self.alphas[t]).view(-1, 1, 1, 1)
+            elif self.cfg.rd_weighting_strategy == "uniform":
+                w = 1
+            elif self.cfg.rd_weighting_strategy == "fantasia3d":
+                w = (self.alphas[t] ** 0.5 * (1 - self.alphas[t])).view(-1, 1, 1, 1)
+            elif self.cfg.rd_weighting_strategy == "sds_sqrt":
+                w = ((1 - self.alphas[t]) ** 0.5).view(-1, 1, 1, 1)
+
+
+            if self.cfg.rd_recon_std_rescale > 0:
+                # gradient in the latent space
+                latents_noisy = self.rd_model.q_sample(rd_latents, t, noise=rd_noise)
+                latents_recon = self.rd_model.predict_start_from_noise(latents_noisy, t, noise_pred_first)
+                # rescale the reconstruction
+                latents_recon_nocfg = self.rd_model.predict_start_from_noise(latents_noisy, t, noise_pred_text)
+                factor = (
+                    latents_recon_nocfg.view(-1,self.cfg.n_view, *latents_recon_nocfg.shape[1:]).std(dim=[1,2,3,4], keepdim=True) +
+                    1e-8
+                ) / (
+                    latents_recon.view(-1,self.cfg.n_view, *latents_recon.shape[1:]).std(dim=[1,2,3,4], keepdim=True) +
+                    1e-8
+                )
+                latents_recon = self.cfg.rd_recon_std_rescale * (
+                    latents_recon.clone() * factor.squeeze(1).repeat_interleave(self.cfg.n_view, dim=0)
+                ) + (1 - self.cfg.rd_recon_std_rescale) * latents_recon
+
+                # determine if second latent is used
+                use_t_plus = self.cfg.rd_plus_ratio > 0 and not self.cfg.rd_use_sds
+                if use_t_plus:
+                    # overwrite the rd_latents with the second laten
+                    latents_noisy_second = self.rd_model.q_sample(rd_latents, t_plus, noise=rd_noise)
+                    latents = self.rd_model.predict_start_from_noise(latents_noisy_second, t_plus, noise_pred_second)
+                else:
+                    latents = rd_latents
+
+                loss = 0.5 * F.mse_loss(latents, latents_recon, reduction="sum") / self.cfg.n_view
+                grad = torch_grad(loss, rd_latents)[0]
+            else:
+                # gradient in the noise space
+                grad = (noise_pred_first - noise_pred_second) * w
+
+        elif self.cfg.rd_weighting_strategy == "dmd":
+            with torch.no_grad():
+                alpha = (self.alphas[t] ** 0.5).view(-1, 1, 1, 1)
+                sigma = ((1 - self.alphas[t]) ** 0.5).view(-1, 1, 1, 1)
+                latent_first = (rd_latents - sigma * noise_pred_first) / alpha
+                latent_second = (rd_latents - sigma * noise_pred_second) / alpha
+            
+                w = torch.abs(rd_latents - latent_first).mean(dim=(1, 2, 3), keepdim=True)
+                grad = (latent_second - latent_first) / (w + 1e-6)
+
         else:
             raise ValueError(
                 f"Unknown weighting strategy: {self.cfg.rd_weighting_strategy}"
             )
-
-        noise_pred_first = noise_pred_uncond + self.cfg.rd_guidance_scale * (
-            noise_pred_text - noise_pred_uncond
-        )
-        noise_pred_second = noise_pred_text_second
-
-        if self.cfg.rd_recon_std_rescale > 0:
-            # gradient in the latent space
-            latents_noisy = self.rd_model.q_sample(rd_latents, t, noise=rd_noise)
-            latents_recon = self.rd_model.predict_start_from_noise(latents_noisy, t, noise_pred_first)
-            # rescale the reconstruction
-            latents_recon_nocfg = self.rd_model.predict_start_from_noise(latents_noisy, t, noise_pred_text)
-            factor = (
-                latents_recon_nocfg.view(-1,self.cfg.n_view, *latents_recon_nocfg.shape[1:]).std(dim=[1,2,3,4], keepdim=True) +
-                1e-8
-            ) / (
-                latents_recon.view(-1,self.cfg.n_view, *latents_recon.shape[1:]).std(dim=[1,2,3,4], keepdim=True) +
-                1e-8
-            )
-            latents_recon = self.cfg.rd_recon_std_rescale * (
-                latents_recon.clone() * factor.squeeze(1).repeat_interleave(self.cfg.n_view, dim=0)
-            ) + (1 - self.cfg.rd_recon_std_rescale) * latents_recon
-
-            # determine if second latent is used
-            use_t_plus = self.cfg.rd_plus_ratio > 0 and not self.cfg.rd_use_sds
-            if use_t_plus:
-                # overwrite the rd_latents with the second laten
-                latents_noisy_second = self.rd_model.q_sample(rd_latents, t_plus, noise=rd_noise)
-                latents = self.rd_model.predict_start_from_noise(latents_noisy_second, t_plus, noise_pred_second)
-            else:
-                latents = rd_latents
-
-            loss = 0.5 * F.mse_loss(latents, latents_recon, reduction="sum") / self.cfg.n_view
-            grad = torch_grad(loss, rd_latents)[0]
-        else:
-            # gradient in the noise space
-            grad = (noise_pred_first - noise_pred_second) * w
 
         grad = torch.nan_to_num(grad)
         # clip grad for stability?
@@ -1333,27 +1359,38 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 is_dual=is_dual,
             )
 
+            noise_pred_first = noise_pred_uncond + self.cfg.sd_guidance_scale * (
+                noise_pred_text - noise_pred_uncond
+            )
 
 
-        # determine the weight
-        if self.cfg.sd_weighting_strategy == "sds":
-            # w(t), sigma_t^2
-            w = (1 - self.alphas[t]).view(-1, 1, 1, 1)
-        elif self.cfg.sd_weighting_strategy == "uniform":
-            w = 1
-        elif self.cfg.sd_weighting_strategy == "fantasia3d":
-            w = (self.alphas[t] ** 0.5 * (1 - self.alphas[t])).view(-1, 1, 1, 1)
-        elif self.cfg.sd_weighting_strategy == "sds_sqrt":
-            w = ((1 - self.alphas[t]) ** 0.5).view(-1, 1, 1, 1)
+        if self.cfg.sd_weighting_strategy in ["sds", "uniform", "fantasia3d", "sds_sqrt"]:
+            # determine the weight
+            if self.cfg.sd_weighting_strategy == "sds":
+                # w(t), sigma_t^2
+                w = (1 - self.alphas[t]).view(-1, 1, 1, 1)
+            elif self.cfg.sd_weighting_strategy == "uniform":
+                w = 1
+            elif self.cfg.sd_weighting_strategy == "fantasia3d":
+                w = (self.alphas[t] ** 0.5 * (1 - self.alphas[t])).view(-1, 1, 1, 1)
+            elif self.cfg.sd_weighting_strategy == "sds_sqrt":
+                w = ((1 - self.alphas[t]) ** 0.5).view(-1, 1, 1, 1)
+
+            grad = (noise_pred_first - noise_pred_second) * w
+        elif self.cfg.sd_weighting_strategy == "dmd":
+            with torch.no_grad():
+                alpha = (self.alphas[t] ** 0.5).view(-1, 1, 1, 1)
+                sigma = ((1 - self.alphas[t]) ** 0.5).view(-1, 1, 1, 1)
+                latent_first = (sd_latents - sigma * noise_pred_first) / alpha
+                latent_second = (sd_latents - sigma * noise_pred_second) / alpha
+            
+                w = torch.abs(sd_latents - latent_first).mean(dim=(1, 2, 3), keepdim=True)
+                grad = (latent_second - latent_first) / (w + 1e-6)
         else:
             raise ValueError(
                 f"Unknown weighting strategy: {self.cfg.sd_weighting_strategy}"
             )
-        
-        noise_pred_first = noise_pred_uncond + self.cfg.sd_guidance_scale * (
-            noise_pred_text - noise_pred_uncond
-        )
-        grad = (noise_pred_first - noise_pred_second) * w
+
         grad = torch.nan_to_num(grad)
         # clip grad for stability?
         if self.grad_clip_val is not None:
@@ -1603,7 +1640,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 0.0 if not is_dual else [0.0, 0.0],
                 device=self.device
             )
-                
+            
         # return the loss and grad_norm
         if not is_dual:
             return {
