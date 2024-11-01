@@ -232,7 +232,7 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
     ):
         super().__init__()
 
-        assert lora_type in ["hexa_v1", "vanilla"]
+        assert lora_type in ["hexa_v1", "vanilla", "none"], "The LoRA type is not supported."
 
         self.hidden_size = hidden_size
         self.rank = rank
@@ -326,6 +326,8 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             query = query + scale * _query_new
         elif self.lora_type in ["vanilla"]:
             query = attn.to_q(hidden_states) + scale * self.to_q_lora(hidden_states)
+        elif self.lora_type in ["none"]:
+            query = attn.to_q(hidden_states)
         else:
             raise NotImplementedError("The LoRA type is not supported for the query in HplaneSelfAttentionLoRAAttnProcessor.")
 
@@ -374,6 +376,11 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
         elif self.lora_type in ["vanilla", ]:
             key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(encoder_hidden_states)
             value = attn.to_v(encoder_hidden_states) + scale * self.to_v_lora(encoder_hidden_states)
+            
+        elif self.lora_type in ["none", ]:
+            key = attn.to_k(encoder_hidden_states)
+            value = attn.to_v(encoder_hidden_states)
+
         else:
             raise NotImplementedError("The LoRA type is not supported for the key and value in HplaneSelfAttentionLoRAAttnProcessor.")
 
@@ -381,7 +388,7 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
         # attention scores
 
         # in self-attention, query of each plane should be used to calculate the attention scores of all planes
-        if self.lora_type in ["hexa_v1", "vanilla"]:
+        if self.lora_type in ["hexa_v1", "vanilla", "none"]:
             query = attn.head_to_batch_dim(
                 query.view(batch_size // 6, sequence_length * 6, self.hidden_size)
             ) 
@@ -397,7 +404,6 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             hidden_states = attn.batch_to_head_dim(hidden_states)
             # split the hidden states into 6 planes
             hidden_states = hidden_states.view(batch_size, sequence_length, self.hidden_size)
-
         else:
             raise NotImplementedError("The LoRA type is not supported for attention scores calculation in HplaneSelfAttentionLoRAAttnProcessor.")
 
@@ -419,9 +425,10 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             # lora for yz plane texture
             _hidden_states_new[5::6] = self.to_out_yz_lora_tex(hidden_states[5::6])
             hidden_states = hidden_states + scale * _hidden_states_new
-
         elif self.lora_type in ["vanilla",]:
             hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(hidden_states)
+        elif self.lora_type in ["none",]:
+            hidden_states = attn.to_out[0](hidden_states)
         else:
             raise NotImplementedError("The LoRA type is not supported for the to_out layer in HplaneSelfAttentionLoRAAttnProcessor.")
 
@@ -455,7 +462,7 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
     ):
         super().__init__()
 
-        assert lora_type in ["hexa_v1", "vanilla"], "The LoRA type is not supported."
+        assert lora_type in ["hexa_v1", "vanilla", "none"], "The LoRA type is not supported."
 
         self.hidden_size = hidden_size
         self.rank = rank
@@ -552,6 +559,9 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
         elif self.lora_type == "vanilla":
             query = attn.to_q(hidden_states) + scale * self.to_q_lora(hidden_states)
         
+        elif self.lora_type == "none":
+            query = attn.to_q(hidden_states)
+
         query = attn.head_to_batch_dim(query)
         ############################################################################################################
 
@@ -599,6 +609,10 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(encoder_hidden_states)
             value = attn.to_v(encoder_hidden_states) + scale * self.to_v_lora(encoder_hidden_states)
 
+        elif self.lora_type in ["none",]:
+            key = attn.to_k(encoder_hidden_states)
+            value = attn.to_v(encoder_hidden_states)
+
         key = attn.head_to_batch_dim(key)
         value = attn.head_to_batch_dim(value)
         ############################################################################################################
@@ -629,6 +643,8 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             hidden_states = hidden_states + scale * _hidden_states_new
         elif self.lora_type in ["vanilla",]:
             hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(hidden_states)
+        elif self.lora_type in ["none",]:
+            hidden_states = attn.to_out[0](hidden_states)
         else:
             raise NotImplementedError("The LoRA type is not supported for the to_out layer in HplaneCrossAttentionLoRAAttnProcessor.")
 
@@ -671,11 +687,6 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
         self.output_dim = self.cfg.output_dim
         self.num_planes = 6
 
-        @dataclass
-        class SubModules:
-            unet: UNet2DConditionModel
-            vae: AutoencoderKL
-
         # we only use the unet and vae model here
         model_path = self.cfg.pretrained_model_name_or_path
         self.scheduler = DDPMScheduler.from_pretrained(model_path, subfolder="scheduler")
@@ -687,17 +698,8 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
         vae = AutoencoderKL.from_pretrained(model_path, subfolder="vae")
         # the encoder is not needed
         del vae.encoder
+        del vae.quant_conv 
         cleanup()
-        self.submodules = SubModules(
-            unet=unet.to(self.device),
-            vae=vae.to(self.device),
-        )
-
-        # free all the parameters
-        for param in self.unet.parameters():
-            param.requires_grad_(False)
-        for param in self.vae.parameters():
-            param.requires_grad_(False)
 
         # transform the attn_processor to customized one
         self.timestep = self.cfg.timestep
@@ -705,101 +707,149 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
         # set the training type
         training_type = self.cfg.training_type
 
-        ############################################################
-        # overwrite the unet and vae with the customized processors
 
-        # save trainable parameters
-        trainable_params = {}
 
         assert "lora" in training_type or "locon" in training_type or "full" in training_type, "The training type is not supported."
  
-        if "lora" in training_type:
-            # parse the rank from the training type, with the template "lora_rank_{}"
-            assert "self_lora_rank" in training_type, "The self_lora_rank is not specified."
-            rank = re.search(r"self_lora_rank_(\d+)", training_type).group(1)
-            self.self_lora_rank = int(rank)
+        if not "full" in training_type: # then paramter-efficient training
 
-            assert "cross_lora_rank" in training_type, "The cross_lora_rank is not specified."
-            rank = re.search(r"cross_lora_rank_(\d+)", training_type).group(1)
-            self.cross_lora_rank = int(rank)
+            # save trainable parameters
+            trainable_params = {}
 
-            # if the finetuning is with bias
+            assert "lora" in training_type or "locon" in training_type, "The training type is not supported."
+            @dataclass
+            class SubModules:
+                unet: UNet2DConditionModel
+                vae: AutoencoderKL
+
+            self.submodules = SubModules(
+                unet=unet.to(self.device),
+                vae=vae.to(self.device),
+            )
+
+            # free all the parameters
+            for param in self.unet.parameters():
+                param.requires_grad_(False)
+            for param in self.vae.parameters():
+                param.requires_grad_(False)
+
+            ############################################################
+            # overwrite the unet and vae with the customized processors
+
+            if "lora" in training_type:
+
+                # parse the rank from the training type, with the template "lora_rank_{}"
+                assert "self_lora_rank" in training_type, "The self_lora_rank is not specified."
+                rank = re.search(r"self_lora_rank_(\d+)", training_type).group(1)
+                self.self_lora_rank = int(rank)
+
+                assert "cross_lora_rank" in training_type, "The cross_lora_rank is not specified."
+                rank = re.search(r"cross_lora_rank_(\d+)", training_type).group(1)
+                self.cross_lora_rank = int(rank)
+
+                # if the finetuning is with bias
+                self.w_lora_bias = False
+                if "with_bias" in training_type:
+                    self.w_lora_bias = True
+
+                # specify the attn_processor for unet
+                lora_attn_procs = self._set_attn_processor(
+                    self.unet, 
+                    self_attn_name="attn1.processor",
+                    self_lora_type=self.cfg.self_lora_type,
+                    cross_lora_type=self.cfg.cross_lora_type
+                )
+                self.unet.set_attn_processor(lora_attn_procs)
+                # update the trainable parameters
+                trainable_params.update(self.unet.attn_processors)
+
+                # specify the attn_processor for vae
+                lora_attn_procs = self._set_attn_processor(
+                    self.vae, 
+                    self_attn_name="processor",
+                    self_lora_type="vanilla", # hard-coded for vae decoder
+                    cross_lora_type="vanilla"
+                )
+                self.vae.set_attn_processor(lora_attn_procs)
+                # update the trainable parameters
+                trainable_params.update(self.vae.attn_processors)
+
+            if "locon" in training_type:
+                # parse the rank from the training type, with the template "locon_rank_{}"
+                rank = re.search(r"locon_rank_(\d+)", training_type).group(1)
+                self.locon_rank = int(rank)
+
+                # if the finetuning is with bias
+                self.w_locon_bias = False
+                if "with_bias" in training_type:
+                    self.w_locon_bias = True
+
+                # specify the conv_processor for unet
+                locon_procs = self._set_conv_processor(
+                    self.unet,
+                    locon_type=self.cfg.locon_type
+                )
+
+                # update the trainable parameters
+                trainable_params.update(locon_procs)
+
+                # specify the conv_processor for vae
+                locon_procs = self._set_conv_processor(
+                    self.vae,
+                    locon_type="vanilla_v1", # hard-coded for vae decoder
+                )
+                # update the trainable parameters
+                trainable_params.update(locon_procs)
+
+            # overwrite the outconv
+            # conv_out_orig = self.vae.decoder.conv_out
+            conv_out_new = nn.Conv2d(
+                in_channels=128, # conv_out_orig.in_channels, hard-coded
+                out_channels=self.cfg.output_dim, kernel_size=3, padding=1
+            )
+
+            # update the trainable parameters
+            self.vae.decoder.conv_out = conv_out_new
+            trainable_params["vae.decoder.conv_out"] = conv_out_new
+
+            # save the trainable parameters
+            self.peft_layers = AttnProcsLayers(trainable_params).to(self.device)
+            self.peft_layers._load_state_dict_pre_hooks.clear()
+            self.peft_layers._state_dict_hooks.clear()      
+
+        elif training_type == "full": # full parameter training
+
+            # just nullify the parameters
+            self.self_lora_rank = 0
+            self.cross_lora_rank = 0
             self.w_lora_bias = False
-            if "with_bias" in training_type:
-                self.w_lora_bias = True
+
+            self.unet = unet.to(self.device)
+            self.vae = vae.to(self.device)
+
+            # overwrite the outconv
+            # conv_out_orig = self.vae.decoder.conv_out
+            conv_out_new = nn.Conv2d(
+                in_channels=128, # conv_out_orig.in_channels, hard-coded
+                out_channels=self.cfg.output_dim, kernel_size=3, padding=1
+            )
+
+            # update the trainable parameters
+            self.vae.decoder.conv_out = conv_out_new.to(self.device)
+
+            ############################################################
+            # overwrite the unet and vae with the customized processors
 
             # specify the attn_processor for unet
             lora_attn_procs = self._set_attn_processor(
                 self.unet, 
                 self_attn_name="attn1.processor",
-                self_lora_type=self.cfg.self_lora_type,
-                cross_lora_type=self.cfg.cross_lora_type
+                self_lora_type="none",
+                cross_lora_type="none",
             )
             self.unet.set_attn_processor(lora_attn_procs)
-            # update the trainable parameters
-            trainable_params.update(self.unet.attn_processors)
-
-            # specify the attn_processor for vae
-            lora_attn_procs = self._set_attn_processor(
-                self.vae, 
-                self_attn_name="processor",
-                self_lora_type="vanilla", # hard-coded for vae decoder
-                cross_lora_type="vanilla"
-            )
-            self.vae.set_attn_processor(lora_attn_procs)
-            # update the trainable parameters
-            trainable_params.update(self.vae.attn_processors)
-
-        if "locon" in training_type:
-            # parse the rank from the training type, with the template "locon_rank_{}"
-            rank = re.search(r"locon_rank_(\d+)", training_type).group(1)
-            self.locon_rank = int(rank)
-
-            # if the finetuning is with bias
-            self.w_locon_bias = False
-            if "with_bias" in training_type:
-                self.w_locon_bias = True
-
-            # specify the conv_processor for unet
-            locon_procs = self._set_conv_processor(
-                self.unet,
-                locon_type=self.cfg.locon_type
-            )
-
-            # update the trainable parameters
-            trainable_params.update(locon_procs)
-
-            # specify the conv_processor for vae
-            locon_procs = self._set_conv_processor(
-                self.vae,
-                locon_type="vanilla_v1", # hard-coded for vae decoder
-            )
-            # update the trainable parameters
-            trainable_params.update(locon_procs)
-
-        if "full" in training_type:
-            raise NotImplementedError("The full training type is not supported.")
-
-        # overwrite the outconv
-        # conv_out_orig = self.vae.decoder.conv_out
-        conv_out_new = nn.Conv2d(
-            in_channels=128, # conv_out_orig.in_channels, hard-coded
-            out_channels=self.cfg.output_dim, kernel_size=3, padding=1
-        )
-
-        # update the trainable parameters
-        self.vae.decoder.conv_out = conv_out_new
-        trainable_params["vae.decoder.conv_out"] = conv_out_new
-
-
-        # save the trainable parameters
-        self.peft_layers = AttnProcsLayers(trainable_params).to(self.device)
-        self.peft_layers._load_state_dict_pre_hooks.clear()
-        self.peft_layers._state_dict_hooks.clear()        
-
-        # # unfreeze the trainable parameters
-        # for param in self.trainable_params.parameters():
-        #     param.requires_grad_(True)
+        else:
+            raise NotImplementedError("The training type is not supported.")
 
         if self.cfg.gradient_checkpoint:
             self.unet.enable_gradient_checkpointing()
