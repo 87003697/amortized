@@ -630,7 +630,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                     w = w.view(img_batch_size // self.cfg.n_view, self.cfg.n_view).mean(dim=-1, keepdim=True).repeat_interleave(self.cfg.n_view, dim=0)
                     w = w.view(-1, 1, 1, 1)
 
-            grad = (latent_second - latent_first) / (w + 1e-6) # avoid zero division
+            grad = (latent_second - latent_first) / (w + 1e-2) # avoid zero division
 
         else:
             raise ValueError(
@@ -1031,7 +1031,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                     w = w.view(-1, 1, 1, 1)
             
                 w = torch.abs(rd_latents - latent_first).mean(dim=(1, 2, 3), keepdim=True)
-                grad = (latent_second - latent_first) / (w + 1e-6)
+                grad = (latent_second - latent_first) / (w + 1e-2)
 
         else:
             raise ValueError(
@@ -1398,7 +1398,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 latent_second = (sd_latents - sigma * noise_pred_second) / alpha
                 # no difference between the two strategies for the single view
                 w = torch.abs(sd_latents - latent_first).mean(dim=(1, 2, 3), keepdim=True)
-                grad = (latent_second - latent_first) / (w + 1e-6)
+                grad = (latent_second - latent_first) / (w + 1e-2)
         else:
             raise ValueError(
                 f"Unknown weighting strategy: {self.cfg.sd_weighting_strategy}"
