@@ -170,9 +170,25 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             else:
                 self.geometry.initialize_shape()
 
+    def on_train_epoch_start(self) -> None:
+        super().on_train_epoch_start()
+
         # for gradient accumulation
         opt = self.optimizers()
         opt.zero_grad()
+
+    def on_train_epoch_end(self) -> None:
+        super().on_train_epoch_end()
+
+        # for gradient accumulation
+        # update the weights with the remaining gradients
+        opt = self.optimizers()
+        try:
+            opt.step()
+            opt.zero_grad()
+        except:
+            pass
+
 
     def forward_rendering(
         self,
