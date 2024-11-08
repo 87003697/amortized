@@ -88,6 +88,8 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
         predition_type: str = "epsilon" # any of "epsilon", "sample"
 
+        gradient_accumulation_steps: int = 1
+
     cfg: Config
 
     def configure(self) -> None:
@@ -167,6 +169,10 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 threestudio.info("Geometry does not have initialize_shape method. skip.")
             else:
                 self.geometry.initialize_shape()
+
+        # for gradient accumulation
+        opt = self.optimizers()
+        opt.zero_grad()
 
     def forward_rendering(
         self,
@@ -399,7 +405,6 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
         # zero the gradients
         opt = self.optimizers()
-        opt.zero_grad()
     
         for i, (t, batch) in enumerate(zip(timesteps, batch_list)):
 
@@ -519,13 +524,15 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
             # store gradients
             loss = weight_fide * fidelity_loss + weight_regu * regularization_loss
-            self.manual_backward(loss)
+            self.manual_backward(loss / self.cfg.gradient_accumulation_steps)
 
             # prepare for the next iteration
             latent = denoised_latents.detach()
             
         # update the weights
-        opt.step()
+        if (batch_idx + 1) % self.cfg.gradient_accumulation_steps == 0:
+            opt.step()
+            opt.zero_grad()
 
     def validation_step(self, batch, batch_idx):
 
