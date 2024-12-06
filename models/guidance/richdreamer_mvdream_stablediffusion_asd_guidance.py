@@ -120,8 +120,6 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
 
     def configure(self) -> None:
 
-        print("The current device is: ", self.device)
-
         ################################################################################################
         if type(self.cfg.sd_weight) in [float, int] and self.cfg.sd_weight == 0:
             threestudio.info("Stable Diffusion is disabled.")

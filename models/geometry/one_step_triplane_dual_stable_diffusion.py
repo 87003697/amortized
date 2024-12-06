@@ -68,6 +68,8 @@ class StableDiffusionTriplaneDualAttention(BaseImplicitGeometry):
     def configure(self) -> None:
         super().configure()
 
+        print("The current device is: ", self.device)
+        
         # set up the space generator
         if self.cfg.backbone == "one_step_triplane_dual_stable_diffusion":
             from ...extern.one_step_triplane_dual_sd_modules import OneStepTriplaneDualStableDiffusion as Generator
