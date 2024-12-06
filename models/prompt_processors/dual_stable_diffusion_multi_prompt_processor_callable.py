@@ -124,7 +124,7 @@ class DualStableDiffusionMultipromptPromptProcessor(MultiRefProcessor):
         text_encoder = modules.pop("text_encoder")
 
         batch_size = 32 # hard coded batch size
-        rank = os.environ.get("RANK")
+        rank = get_rank(opposite=True)
         for i in tqdm(
             range(0, len(prompt_list), batch_size),
             desc="Saving text embeddings in GPU {}".format(rank),
