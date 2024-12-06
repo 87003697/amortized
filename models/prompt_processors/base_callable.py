@@ -100,8 +100,9 @@ class MultiRefProcessor(BaseObject):
         assert self.cfg.use_latent is False, "Latent embeddings are not supported for text embeddings"
         os.makedirs(self._cache_dir, exist_ok=True)
 
-        rank = get_rank()
-        num_gpus = torch.cuda.device_count()
+        rank = get_rank(opposite=True)
+        # find all available gpus via world_size
+        num_gpus = len(os.environ.get("CUDA_VISIBLE_DEVICES", None).split(","))
         if num_gpus > 1:
             # each process only has a subset of the prompt library!
             all_prompts = all_prompts[rank::num_gpus]
@@ -188,8 +189,8 @@ class MultiRefProcessor(BaseObject):
         import pdb; pdb.set_trace()
         os.makedirs(self._cache_dir, exist_ok=True)
 
-        rank = get_rank()
-        num_gpus = torch.cuda.device_count()
+        rank = get_rank(opposite=True)
+        num_gpus = len(os.environ.get("CUDA_VISIBLE_DEVICES", None).split(","))
         if num_gpus > 1:
             # each process only has a subset of the prompt library!
             all_image_paths = all_image_paths[rank::num_gpus]
