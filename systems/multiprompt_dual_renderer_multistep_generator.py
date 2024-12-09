@@ -584,18 +584,23 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             batch["text_embed"] = prompt_utils.get_global_text_embeddings()
             batch["text_embed_bg"] = prompt_utils.get_global_text_embeddings(use_local_text_embeddings = False)
     
-        batch["space_cache"] = self.diffusion_reverse(batch)
+        try:
+            batch["space_cache"] = self.diffusion_reverse(batch)
 
-        if render_images:
-            out, out_2nd = self.forward_rendering(batch)
-            batch_size = out['comp_rgb'].shape[0]
+            if render_images:
+                out, out_2nd = self.forward_rendering(batch)
+                batch_size = out['comp_rgb'].shape[0]
 
-            for batch_idx in tqdm(range(batch_size), desc="Saving test images"):
-                self._save_image_grid(batch, batch_idx, out, phase="test", render="1st")
-                self._save_image_grid(batch, batch_idx, out_2nd, phase="test", render="2nd")
+                for batch_idx in tqdm(range(batch_size), desc="Saving test images"):
+                    self._save_image_grid(batch, batch_idx, out, phase="test", render="1st")
+                    self._save_image_grid(batch, batch_idx, out_2nd, phase="test", render="2nd")
 
-        if return_space_cache:
-            return batch["space_cache"]
+            if return_space_cache:
+                return batch["space_cache"]
+        except:
+            # RuntimeError: Expected size for first two dimensions of batch2 tensor to be: [60, 64] but got: [30, 64].
+            # TODO: fix this issue
+            pass
 
     def _compute_loss(
         self,

@@ -100,7 +100,7 @@ class StableDiffusionMultipromptCallableProcessor(MultiPromptProcessor):
             prompt_list = [prompt_list]
 
         batch_size = 32 # hard coded batch size
-        rank = get_rank()
+        rank = get_rank(opposite=True)
         for i in tqdm(
             range(0, len(prompt_list), batch_size),
             desc="Saving text embeddings in GPU {}".format(rank),
