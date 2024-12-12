@@ -1076,7 +1076,8 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
             collate_fn=self.train_dataset.collate,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            prefetch_factor=self.prefetch_factor
+            prefetch_factor=self.prefetch_factor,
+            drop_last=True
         )
     
     def val_dataloader(self) -> DataLoader:
