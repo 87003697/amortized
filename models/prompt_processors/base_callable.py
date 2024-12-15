@@ -25,6 +25,7 @@ from itertools import cycle
 from .utils import hash_prompt, _load_image_embedding, _load_prompt_embedding_v2 as _load_prompt_embedding
 
 from functools import partial
+from tqdm import tqdm
 
 
 ##############################################
@@ -118,7 +119,7 @@ class MultiRefProcessor(BaseObject):
                     all_prompts += [self.cfg.other_prompts]
 
         prompts_to_process = []
-        for prompt in all_prompts:
+        for prompt in tqdm(all_prompts, desc="Processing prompts"):
             if self.cfg.use_cache:
 
                 # some text encodings might be already in cache
