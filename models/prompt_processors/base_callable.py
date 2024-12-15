@@ -119,7 +119,7 @@ class MultiRefProcessor(BaseObject):
                     all_prompts += [self.cfg.other_prompts]
 
         prompts_to_process = []
-        for prompt in tqdm(all_prompts, desc="Processing prompts"):
+        for prompt in tqdm(all_prompts, desc="Checking existing text embeddings"):
             if self.cfg.use_cache:
 
                 # some text encodings might be already in cache
@@ -166,7 +166,6 @@ class MultiRefProcessor(BaseObject):
                 modules = self.load_model_text()
 
                 # single process
-                from tqdm import tqdm
                 for prompt in tqdm(prompts_to_process, desc="Processing prompts"):
                     self.func_text(
                         self.cfg.pretrained_model_name_or_path,
@@ -256,7 +255,6 @@ class MultiRefProcessor(BaseObject):
                 modules = self.load_model_image()
 
                 # single process
-                from tqdm import tqdm
                 for image_path in tqdm(image_paths_to_process, desc="Processing refs"):
                     self.func_image(
                         self.cfg.pretrained_model_name_or_path,
