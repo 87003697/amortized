@@ -174,8 +174,9 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
                         max = self.cfg.occ_thres
                     )
                 ).view(estimator.binaries.shape)
-            assert estimator.binaries.sum() > 0, "No valid occs"
-            
+            # self.estimator.occs.fill_(True)
+            # self.estimator.binaries.fill_(True)
+
             out = self._forward(
                 rays_o=rays_o[
                         idx*num_views_per_batch:(idx+1)*num_views_per_batch
@@ -441,17 +442,14 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
             bg_normal_white = torch.ones_like(comp_normal)
 
             # comp_normal_vis = (comp_normal + 1.0) / 2.0 * opacity + (1 - opacity) * bg_normal
-            try:
-                # convert_normal_to_cam_space
-                w2c: Float[Tensor, "B 4 4"] = torch.inverse(c2w)
-                rot: Float[Tensor, "B 3 3"] = w2c[:, :3, :3]
-                comp_normal_cam = comp_normal.view(batch_size, -1, 3) @ rot.permute(0, 2, 1)
-                flip_x = torch.eye(3, device=comp_normal_cam.device) #  pixel space flip axis so we need built negative y-axis normal
-                flip_x[0, 0] = -1
-                comp_normal_cam = comp_normal_cam @ flip_x[None, :, :]
-                comp_normal_cam = comp_normal_cam.view(-1, 3) # reshape back to (Nr, 3)
-            except:
-                import pdb; pdb.set_trace()
+            # convert_normal_to_cam_space
+            w2c: Float[Tensor, "B 4 4"] = torch.inverse(c2w)
+            rot: Float[Tensor, "B 3 3"] = w2c[:, :3, :3]
+            comp_normal_cam = comp_normal.view(batch_size, -1, 3) @ rot.permute(0, 2, 1)
+            flip_x = torch.eye(3, device=comp_normal_cam.device) #  pixel space flip axis so we need built negative y-axis normal
+            flip_x[0, 0] = -1
+            comp_normal_cam = comp_normal_cam @ flip_x[None, :, :]
+            comp_normal_cam = comp_normal_cam.view(-1, 3) # reshape back to (Nr, 3)
             comp_normal_cam_vis = (comp_normal_cam + 1.0) / 2.0 * opacity + (1 - opacity) * bg_normal
             comp_normal_cam_vis_white = (comp_normal_cam + 1.0) / 2.0 * opacity + (1 - opacity) * bg_normal_white
 
