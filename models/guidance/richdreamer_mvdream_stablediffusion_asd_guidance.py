@@ -1621,10 +1621,11 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 0, self.cfg.n_view,
                 (rgb.shape[0] // self.cfg.n_view,), device=self.device, dtype=torch.long
             )
+            _idx = torch.arange(0, rgb.shape[0], self.cfg.n_view, device=self.device, dtype=torch.long)
             if is_dual:
                 idx_2nd = (idx + self.cfg.n_view // 2) % self.cfg.n_view # the 2nd rendering is the opposite view, we assume n_view is even
                 idx = torch.cat([idx, idx_2nd], dim=0)
-            idx += torch.arange(0, rgb.shape[0], self.cfg.n_view, device=self.device, dtype=torch.long)
+            idx += _idx.repeat_interleave(2 if is_dual else 1, dim=0)
         else: # only one rendering
             idx = torch.randint(
                 0, self.cfg.n_view,
