@@ -79,11 +79,11 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         # the following is specific to stable diffusion
         sd_min_step_percent: Optional[float] = None
         sd_max_step_percent: Optional[float] = None
-        sd_all_views: bool = False
         sd_image_size: int = 512
         sd_guidance_scale: float = 7.5
         sd_weight: float = 1.
         sd_weighting_strategy: str = "uniform" # ASD is suitable for uniform weighting, but can be extended to other strategies
+        sd_hq_only: bool = False
 
         # the following is shared between mvdream and stable diffusion
         grad_clip: Optional[
@@ -1615,10 +1615,16 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
 
         ################################################################################################
         # the following is specific to Stable Diffusion
-        if self.cfg.sd_all_views:
-            idx = torch.arange(0, rgb.shape[0], device=self.device, dtype=torch.long)
+        if self.cfg.sd_hq_only:
+            # select only one rendering from n_view renderings
+            idx = torch.randint(
+                0, self.cfg.n_view,
+                (rgb.shape[0] // self.cfg.n_view,), device=self.device, dtype=torch.long
+            )
             if is_dual:
-                idx_2nd = torch.arange(0, rgb_2nd.shape[0], device=self.device, dtype=torch.long)
+                idx_2nd = (idx + self.cfg.n_view // 2) % self.cfg.n_view # the 2nd rendering is the opposite view, we assume n_view is even
+                idx = torch.cat([idx, idx_2nd], dim=0)
+            idx += torch.arange(0, rgb.shape[0], self.cfg.n_view, device=self.device, dtype=torch.long)
         else: # only one rendering
             idx = torch.randint(
                 0, self.cfg.n_view,
@@ -1642,8 +1648,8 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 c2w[idx],
                 rgb_as_latents=rgb_as_latents,
                 fovy=fovy,
-                rgb_2nd=rgb_2nd[idx_2nd] if is_dual else None,
-                azimuth_2nd=azimuth[idx_2nd] if is_dual else None,
+                rgb_2nd=rgb_2nd[idx_2nd] if is_dual and not self.cfg.sd_hq_only else None,
+                azimuth_2nd=azimuth[idx_2nd] if is_dual and not self.cfg.sd_hq_only else None,
                 **kwargs,
             )
         else:
@@ -1687,8 +1693,9 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
             grad_norm += self.rd_weight * grad_rd[1]
             loss += self.mv_weight * loss_mv[1]
             grad_norm += self.mv_weight * grad_mv[1]
-            loss += self.sd_weight * loss_sd[1]
-            grad_norm += self.sd_weight * loss_sd[1]
+            if not self.cfg.sd_hq_only: # otherwise, sd's grad for the 2nd rendering is not computed
+                loss += self.sd_weight * loss_sd[1]
+                grad_norm += self.sd_weight * loss_sd[1]
                                                
             guidance_2nd =  {
                 "loss_asd": loss,
