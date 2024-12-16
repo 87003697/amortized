@@ -155,7 +155,7 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
 
             # special case when all sdf values are positive or negative, thus no isosurface
             if torch.all(sdf > 0) or torch.all(sdf < 0):
-                threestudio.info("In volume renderer, all sdf values are positive or negative, no isosurface")
+                # threestudio.info("In volume renderer, all sdf values are positive or negative, no isosurface")
 
                 # follow InstantMesh https://github.com/TencentARC/InstantMesh/blob/main/src/models/lrm_mesh.py
                 update_sdf = torch.zeros_like(sdf)
