@@ -617,7 +617,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
 
             grad = (noise_pred_first - noise_pred_second) * w
 
-        elif self.cfg.mv_weighting_strategy in ["dmd", "dmd_mv"]:
+        elif self.cfg.mv_weighting_strategy in ["dmd", "dmd_mv", "dmd_mv+1"]:
             # eps to mu
             with torch.no_grad():
                 alpha = (self.alphas[t] ** 0.5).view(-1, 1, 1, 1)
@@ -629,6 +629,16 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                     w = torch.abs(mv_latents - latent_first).mean(dim=(1, 2, 3), keepdim=True)
                 elif self.cfg.mv_weighting_strategy == "dmd_mv":
                     w = torch.abs(mv_latents - latent_first).mean(dim=(1, 2, 3))
+                    w = w.view(img_batch_size // self.cfg.n_view, self.cfg.n_view).mean(dim=-1, keepdim=True).repeat_interleave(self.cfg.n_view, dim=0)
+                    w = w.view(-1, 1, 1, 1)
+                elif self.cfg.mv_weighting_strategy == "dmd_mv+1":
+                    _noise_pred_second =  noise_pred_uncond + self.cfg.mv_guidance_scale * (
+                        noise_pred_text_second - noise_pred_uncond
+                    )
+                    _alpha = (self.alphas[t_plus] ** 0.5).view(-1, 1, 1, 1)
+                    _sigma = ((1 - self.alphas[t_plus]) ** 0.5).view(-1, 1, 1, 1)
+                    _latent_second = (mv_latents - _sigma * _noise_pred_second) / _alpha
+                    w = torch.abs(mv_latents - _latent_second).mean(dim=(1, 2, 3), keepdim=True)
                     w = w.view(img_batch_size // self.cfg.n_view, self.cfg.n_view).mean(dim=-1, keepdim=True).repeat_interleave(self.cfg.n_view, dim=0)
                     w = w.view(-1, 1, 1, 1)
 
@@ -1018,7 +1028,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 # gradient in the noise space
                 grad = (noise_pred_first - noise_pred_second) * w
 
-        elif self.cfg.rd_weighting_strategy in ["dmd", "dmd_mv"]:
+        elif self.cfg.rd_weighting_strategy in ["dmd", "dmd_mv", "dmd_mv+1"]:
             with torch.no_grad():
                 alpha = (self.alphas[t] ** 0.5).view(-1, 1, 1, 1)
                 sigma = ((1 - self.alphas[t]) ** 0.5).view(-1, 1, 1, 1)
@@ -1031,8 +1041,17 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                     w = torch.abs(rd_latents - latent_first).mean(dim=(1, 2, 3))
                     w = w.view(img_batch_size // self.cfg.n_view, self.cfg.n_view).mean(dim=-1, keepdim=True).repeat_interleave(self.cfg.n_view, dim=0)
                     w = w.view(-1, 1, 1, 1)
+                elif self.cfg.rd_weighting_strategy == "dmd_mv+1":
+                    _noise_pred_second =  noise_pred_uncond + self.cfg.rd_guidance_scale * (
+                        noise_pred_text_second - noise_pred_uncond
+                    )
+                    _alpha = (self.alphas[t_plus] ** 0.5).view(-1, 1, 1, 1)
+                    _sigma = ((1 - self.alphas[t_plus]) ** 0.5).view(-1, 1, 1, 1)
+                    _latent_second = (rd_latents - _sigma * _noise_pred_second) / _alpha
+                    w = torch.abs(rd_latents - _latent_second).mean(dim=(1, 2, 3), keepdim=True)
+                    w = w.view(img_batch_size // self.cfg.n_view, self.cfg.n_view).mean(dim=-1, keepdim=True).repeat_interleave(self.cfg.n_view, dim=0)
+                    w = w.view(-1, 1, 1, 1)
             
-                w = torch.abs(rd_latents - latent_first).mean(dim=(1, 2, 3), keepdim=True)
                 grad = (latent_second - latent_first) / (w + self.cfg.eps)
 
         else:
@@ -1392,14 +1411,24 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 w = ((1 - self.alphas[t]) ** 0.5).view(-1, 1, 1, 1)
 
             grad = (noise_pred_first - noise_pred_second) * w
-        elif self.cfg.sd_weighting_strategy in ["dmd", "dmd_mv"]:
+        elif self.cfg.sd_weighting_strategy in ["dmd", "dmd_mv", "dmd_mv+1"]:
             with torch.no_grad():
                 alpha = (self.alphas[t] ** 0.5).view(-1, 1, 1, 1)
                 sigma = ((1 - self.alphas[t]) ** 0.5).view(-1, 1, 1, 1)
                 latent_first = (sd_latents - sigma * noise_pred_first) / alpha
                 latent_second = (sd_latents - sigma * noise_pred_second) / alpha
                 # no difference between the two strategies for the single view
-                w = torch.abs(sd_latents - latent_first).mean(dim=(1, 2, 3), keepdim=True)
+                if self.cfg.sd_weighting_strategy in ["dmd", "dmd_mv"]:
+                    w = torch.abs(sd_latents - latent_first).mean(dim=(1, 2, 3), keepdim=True)
+                else:
+                    _noise_pred_second =  noise_pred_uncond + self.cfg.sd_guidance_scale * (
+                        noise_pred_second - noise_pred_uncond
+                    )
+                    _alpha = (self.alphas[t_plus] ** 0.5).view(-1, 1, 1, 1)
+                    _sigma = ((1 - self.alphas[t_plus]) ** 0.5).view(-1, 1, 1, 1)
+                    _latent_second = (sd_latents - _sigma * _noise_pred_second) / _alpha
+                    w = torch.abs(sd_latents - _latent_second).mean(dim=(1, 2, 3), keepdim=True)
+                    
                 grad = (latent_second - latent_first) / (w + self.cfg.eps)
         else:
             raise ValueError(

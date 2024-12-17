@@ -246,42 +246,46 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
                 else:
                     raise ValueError("space_cache must be a tensor or a dict")
                 
-                if self.cfg.use_volsdf:
-                    t_origins: Float[Tensor, "Nr 1 3"] = rays_o_flatten.unsqueeze(-2)
-                    t_dirs: Float[Tensor, "Nr 1 3"] = rays_d_flatten.unsqueeze(-2)
-                    positions: Float[Tensor, "Nr Ns 3"] = (
-                        t_origins + t_dirs * (t_starts + t_ends)[..., None] / 2.0
-                    )
-                    with torch.no_grad():
-                        if self.training and not self.chunk_training:
-                            geo_out = self.geometry(
-                                positions.reshape(B, -1, 3),
+                t_origins: Float[Tensor, "Nr 1 3"] = rays_o_flatten.unsqueeze(-2)
+                t_dirs: Float[Tensor, "Nr 1 3"] = rays_d_flatten.unsqueeze(-2)
+                positions: Float[Tensor, "Nr Ns 3"] = (
+                    t_origins + t_dirs * (t_starts + t_ends)[..., None] / 2.0
+                )
+                with torch.no_grad():
+                    if self.training and not self.chunk_training:
+                        geo_out = self.geometry(
+                            positions.reshape(B, -1, 3),
+                            space_cache=space_cache,
+                            output_normal=False,
+                        )
+
+                    else:
+                        geo_out = chunk_batch_custom(
+                            partial(
+                                proposal_network,
                                 space_cache=space_cache,
-                                output_normal=False,
-                            )
+                            ),
+                            self.cfg.train_chunk_size if self.training else self.cfg.eval_chunk_size,
+                            positions.reshape(B, -1, 3),
+                            output_normal=False,
+                        )
+                    inv_std = self.variance(geo_out["sdf"])
 
-                        else:
-                            geo_out = chunk_batch_custom(
-                                partial(
-                                    proposal_network,
-                                    space_cache=space_cache,
-                                ),
-                                self.cfg.train_chunk_size if self.training else self.cfg.eval_chunk_size,
-                                positions.reshape(B, -1, 3),
-                                output_normal=False,
-                            )
-                        inv_std = self.variance(geo_out["sdf"])
+                    if self.cfg.use_volsdf:
                         density:  Float[Tensor, "B Ns"] = volsdf_density(geo_out["sdf"], inv_std).reshape(positions.shape[:2])
-                    
-                        # # smooth the density, trick in EG3D and PanoHead, but here is performed on the density
-                        # density = F.max_pool1d(density.unsqueeze(1), 2, 1, padding = 1)
-                        # density = F.max_pool1d(density, 2, 1, ).squeeze(1)
+                    else:
+                        sdf = geo_out["sdf"]
+                        estimated_next_sdf = sdf - self.render_step_size * 0.5
+                        estimated_prev_sdf = sdf + self.render_step_size * 0.5
+                        prev_cdf = torch.sigmoid(estimated_prev_sdf * inv_std)
+                        next_cdf = torch.sigmoid(estimated_next_sdf * inv_std)
+                        p = prev_cdf - next_cdf
+                        c = prev_cdf
+                        alpha = ((p + 1e-5) / (c + 1e-5)).clip(0.0, 1.0)
+                        density = (alpha / self.render_step_size).reshape(positions.shape[:2])
+                        
+                return density
 
-                    return density
-                else:
-                    raise ValueError(
-                        "Currently only VolSDF supports importance sampling."
-                    )
             t_starts_, t_ends_ = self.estimator.sampling(
                 prop_sigma_fns=[
                         partial(
