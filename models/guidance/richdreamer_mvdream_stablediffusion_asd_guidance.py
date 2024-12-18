@@ -84,6 +84,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         sd_weight: float = 1.
         sd_weighting_strategy: str = "uniform" # ASD is suitable for uniform weighting, but can be extended to other strategies
         sd_hq_only: bool = False
+        sd_oppo_side: bool = False
 
         # the following is shared between mvdream and stable diffusion
         grad_clip: Optional[
@@ -1645,6 +1646,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
         ################################################################################################
         # the following is specific to Stable Diffusion
         if self.cfg.sd_hq_only:
+            assert self.cfg.sd_oppo_side, "sd_oppo_side must be True if sd_hq_only is True"
             # select only one rendering from n_view renderings
             idx = torch.randint(
                 0, self.cfg.n_view,
@@ -1656,18 +1658,27 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 idx = torch.cat([idx, idx_2nd], dim=0)
             idx += _idx.repeat_interleave(2 if is_dual else 1, dim=0)
         else: # only one rendering
-            idx = torch.randint(
-                0, self.cfg.n_view,
-                (rgb.shape[0] // self.cfg.n_view,), device=self.device, dtype=torch.long
-            )
-            idx += torch.arange(0, rgb.shape[0], self.cfg.n_view, device=self.device, dtype=torch.long)
-            if is_dual:
-                idx_2nd = torch.randint(
+            if self.cfg.sd_oppo_side:
+                idx = torch.randint(
                     0, self.cfg.n_view,
-                    (rgb_2nd.shape[0] // self.cfg.n_view,), device=self.device, dtype=torch.long
+                    (rgb.shape[0] // self.cfg.n_view,), device=self.device, dtype=torch.long
                 )
-                idx_2nd += torch.arange(0, rgb_2nd.shape[0], self.cfg.n_view, device=self.device, dtype=torch.long)
-                
+                idx_2nd = (idx + self.cfg.n_view // 2) % self.cfg.n_view # the 2nd rendering is the opposite view, we assume n_view is even
+                idx += torch.arange(0, rgb.shape[0], self.cfg.n_view, device=self.device, dtype=torch.long)
+                idx_2nd += torch.arange(0, rgb.shape[0], self.cfg.n_view, device=self.device, dtype=torch.long)
+            else:
+                idx = torch.randint(
+                    0, self.cfg.n_view,
+                    (rgb.shape[0] // self.cfg.n_view,), device=self.device, dtype=torch.long
+                )
+                idx += torch.arange(0, rgb.shape[0], self.cfg.n_view, device=self.device, dtype=torch.long)
+                if is_dual:
+                    idx_2nd = torch.randint(
+                        0, self.cfg.n_view,
+                        (rgb_2nd.shape[0] // self.cfg.n_view,), device=self.device, dtype=torch.long
+                    )
+                    idx_2nd += torch.arange(0, rgb_2nd.shape[0], self.cfg.n_view, device=self.device, dtype=torch.long)
+                    
         if self.sd_weight > 0:
             loss_sd, grad_sd = self.sd_grad_asd(
                 rgb[idx],
