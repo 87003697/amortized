@@ -63,6 +63,7 @@ class StableDiffusionTriplaneDualAttention(BaseImplicitGeometry):
         # xz plane should looks that a img from right-left / left-right view
         # yz plane should looks that a img from front-back / back-front view
         rotate_planes: Optional[str] = None # "v1"
+        split_channels: Optional[str] = None 
 
 
     def configure(self) -> None:
@@ -78,6 +79,9 @@ class StableDiffusionTriplaneDualAttention(BaseImplicitGeometry):
             raise ValueError(f"Unknown backbone {self.cfg.backbone}")
 
         input_dim = self.space_generator.output_dim # feat_xy + feat_xz + feat_yz
+        assert self.cfg.split_channels in [None, "v1"]
+        if self.cfg.split_channels in ["v1"]: # split geometry and texture
+            input_dim = input_dim // 2
 
         self.sdf_network = get_mlp(
             input_dim,
@@ -85,6 +89,7 @@ class StableDiffusionTriplaneDualAttention(BaseImplicitGeometry):
             self.cfg.mlp_network_config,
         )
         if self.cfg.n_feature_dims > 0:
+
             self.feature_network = get_mlp(
                 input_dim,
                 self.cfg.n_feature_dims,
@@ -164,7 +169,16 @@ class StableDiffusionTriplaneDualAttention(BaseImplicitGeometry):
         triplane = self.space_generator.forward_decode(
             latents = latents
         )
-        return triplane
+        if self.cfg.split_channels == None:
+            return triplane
+        elif self.cfg.split_channels == "v1":
+            B, _, C, H, W = triplane.shape
+            # geometry triplane uses the first n_feature_dims // 2 channels
+            # texture triplane uses the last n_feature_dims // 2 channels
+            used_indices_geo = torch.tensor([True] * (self.space_generator.output_dim// 2) + [False] * (self.space_generator.output_dim // 2))
+            used_indices_tex = torch.tensor([False] * (self.space_generator.output_dim // 2) + [True] * (self.space_generator.output_dim // 2))
+            used_indices = torch.stack([used_indices_geo] * 3 + [used_indices_tex] * 3, dim=0).to(triplane.device)
+            return triplane[:, used_indices].view(B, 6, C//2, H, W)
 
     def interpolate_encodings(
         self,
