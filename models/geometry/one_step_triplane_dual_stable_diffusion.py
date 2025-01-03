@@ -65,6 +65,9 @@ class StableDiffusionTriplaneDualAttention(BaseImplicitGeometry):
         rotate_planes: Optional[str] = None # "v1"
         split_channels: Optional[str] = None 
 
+        geo_interpolate: str = "v1" # in ["v1", "v2"]
+        tex_interpolate: str = "v1" # in ["v1", "v2"]
+
 
     def configure(self) -> None:
         super().configure()
@@ -83,15 +86,27 @@ class StableDiffusionTriplaneDualAttention(BaseImplicitGeometry):
         if self.cfg.split_channels in ["v1"]: # split geometry and texture
             input_dim = input_dim // 2
 
+        assert self.cfg.geo_interpolate in ["v1", "v2"]
+        if self.cfg.geo_interpolate in ["v2"]: 
+            geo_input_dim = input_dim * 3 # concat[feat_xy, feat_xz, feat_yz]
+        else:
+            geo_input_dim = input_dim # feat_xy + feat_xz + feat_yz   
+
+        assert self.cfg.tex_interpolate in ["v1", "v2"]
+        if self.cfg.tex_interpolate in ["v2"]:
+            tex_input_dim = input_dim * 3 # concat[feat_xy, feat_xz, feat_yz]
+        else:
+            tex_input_dim = input_dim # feat_xy + feat_xz + feat_yz
+
         self.sdf_network = get_mlp(
-            input_dim,
+            geo_input_dim,
             1,
             self.cfg.mlp_network_config,
         )
         if self.cfg.n_feature_dims > 0:
 
             self.feature_network = get_mlp(
-                input_dim,
+                tex_input_dim,
                 self.cfg.n_feature_dims,
                 self.cfg.mlp_network_config,
             )
@@ -101,7 +116,7 @@ class StableDiffusionTriplaneDualAttention(BaseImplicitGeometry):
                 self.cfg.isosurface_method == "mt"
             ), "isosurface_deformable_grid only works with mt"
             self.deformation_network = get_mlp(
-                input_dim,
+                geo_input_dim,
                 3,
                 self.cfg.mlp_network_config,
             )
@@ -192,10 +207,7 @@ class StableDiffusionTriplaneDualAttention(BaseImplicitGeometry):
         assert self.cfg.rotate_planes in [None, "v1", "v2"]
 
         if self.cfg.rotate_planes == None:
-            return sample_from_planes(
-                plane_features = space_cache,
-                coordinates = points,
-            ).view(*points.shape[:-1],-1)
+            raise NotImplementedError("rotate_planes == None is not implemented yet.")
 
         space_cache_rotated = torch.zeros_like(space_cache)
         if self.cfg.rotate_planes == "v1":
@@ -230,7 +242,7 @@ class StableDiffusionTriplaneDualAttention(BaseImplicitGeometry):
         geo_feat = sample_from_planes(
             plane_features = space_cache_rotated[:, 0:3].contiguous(),
             coordinates = points,
-            interpolate_feat = "v1"
+            interpolate_feat = self.cfg.geo_interpolate
         ).view(*points.shape[:-1],-1)
 
         if only_geo:
@@ -240,7 +252,7 @@ class StableDiffusionTriplaneDualAttention(BaseImplicitGeometry):
             tex_feat = sample_from_planes(
                 plane_features = space_cache_rotated[:, 3:6].contiguous(),
                 coordinates = points,
-                interpolate_feat = "v1"
+                interpolate_feat = self.cfg.tex_interpolate
             ).view(*points.shape[:-1],-1)
 
             return geo_feat, tex_feat
