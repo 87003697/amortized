@@ -49,6 +49,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
 
         # sdf forcing strategy for generative space
         sdf_grad_shrink: float = 1.
+        allow_deformation_shrink: bool = True
 
         allow_empty_flag: bool = True
 
@@ -415,7 +416,8 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         # change the gradient of the sdf
         if self.sdf_grad_shrink != 0:
             sdf_batch = self.sdf_grad_shrink * sdf_batch + (1 - self.sdf_grad_shrink) * sdf_batch.detach()
-            deformation_batch = self.sdf_grad_shrink * deformation_batch + (1 - self.sdf_grad_shrink) * deformation_batch.detach() if deformation_batch is not None else None
+            if self.cfg.allow_deformation_shrink:
+                deformation_batch = self.sdf_grad_shrink * deformation_batch + (1 - self.sdf_grad_shrink) * deformation_batch.detach() if deformation_batch is not None else None
         else: # save memory
             sdf_batch = sdf_batch.detach()
             deformation_batch = self.sdf_grad_shrink * deformation_batch + (1 - self.sdf_grad_shrink) * deformation_batch.detach() if deformation_batch is not None else None

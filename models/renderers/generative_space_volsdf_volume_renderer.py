@@ -19,6 +19,7 @@ from threestudio.utils.typing import *
 from threestudio.utils.ops import chunk_batch as chunk_batch_original
 
 from threestudio.models.renderers.neus_volume_renderer import volsdf_density
+from threestudio.utils.misc import C
 
 class LearnedVariance(nn.Module):
     def __init__(self, init_val, requires_grad=True):
@@ -62,6 +63,9 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
 
         # for chunking in training
         train_chunk_size: int = 0
+
+        # for balancing the low-res and high-res gradients
+        rgb_grad_shrink: float = 1.0
 
 
     cfg: Config
@@ -382,6 +386,11 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
                     dirs=rays_d
                 )
 
+        if self.rgb_grad_shrink != 1.0:
+            # shrink the gradient of rgb_fg_all
+            # this is to balance the low-res and high-res gradients
+            rgb_fg_all = self.rgb_grad_shrink * rgb_fg_all + (1.0 - self.rgb_grad_shrink) * rgb_fg_all.detach()
+
         # grad or normal?
         alpha: Float[Tensor, "Nr 1"] = self.get_alpha(
             geo_out["sdf"], geo_out["normal"], t_dirs, t_intervals
@@ -506,7 +515,9 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
     def update_step(
         self, epoch: int, global_step: int, on_load_weights: bool = False
     ) -> None:
-        pass
+        self.rgb_grad_shrink = C(
+            self.cfg.rgb_grad_shrink, epoch, global_step
+        )
 
     def train(self, mode=True):
         self.randomized = mode and self.cfg.randomized
