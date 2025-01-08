@@ -49,7 +49,8 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
 
         # sdf forcing strategy for generative space
         sdf_grad_shrink: float = 1.
-        allow_deformation_shrink: bool = True
+        
+        def_grad_shrink: float = 1.
 
         allow_empty_flag: bool = True
 
@@ -386,6 +387,9 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         self.sdf_grad_shrink = C(
             self.cfg.sdf_grad_shrink, epoch, global_step
         )
+        self.def_grad_shrink = C(   
+            self.cfg.def_grad_shrink, epoch, global_step
+        )
 
     def isosurface(self, space_cache: Float[Tensor, "B ..."]) -> List[Mesh]:
 
@@ -419,8 +423,11 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         else: # save memory
             sdf_batch = sdf_batch.detach()
             
-        if self.cfg.allow_deformation_shrink:
+        if self.def_grad_shrink != 0:
             deformation_batch = self.sdf_grad_shrink * deformation_batch + (1 - self.sdf_grad_shrink) * deformation_batch.detach() \
+                if deformation_batch is not None else None
+        else: # save memory
+            deformation_batch = deformation_batch.detach() \
                 if deformation_batch is not None else None
         
         # get the isosurface
