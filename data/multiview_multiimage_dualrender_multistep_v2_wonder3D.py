@@ -73,9 +73,10 @@ class MultiviewMultipromptDualRendererMultiStepDataModuleConfig:
     light_sample_strategy: str = "dreamfusion"
     # the following settings are for unsupervised training ############################
     # the prompt corpus
-    prompt_library: str = "magic3d_prompt_library"
-    prompt_library_dir: str = "load"
-    prompt_library_format: str = "json"
+    image_library: str = "sdxl_3d_animation_v1_7_image_library"
+    image_library_dir: str = "load"
+    image_library_format: str = "json"
+    image_root_dir: str = "datasets"
     # camera ranges are randomized, not specified
     unsup_elevation_range: Tuple[float, float] = (-10, 90)
     unsup_light_distance_range: Tuple[float, float] = (0.8, 1.5)
@@ -128,7 +129,7 @@ class BaseDataset(Dataset, Updateable):
     def __init__(
             self, 
             cfg: Any, 
-            unsup_prompt_library: List, 
+            unsup_image_library: List, 
             sup_obj_library: List,
             guidance_processor = None,
             condition_processor = None
@@ -191,8 +192,8 @@ class BaseDataset(Dataset, Updateable):
         
         ##############################################################################################################
         # the following config is related to the prompt library without ground truth
-        self.unsup_prompt_library: List = unsup_prompt_library
-        self.unsup_length = len(self.unsup_prompt_library)
+        self.unsup_image_library: List = unsup_image_library
+        self.unsup_length = len(self.unsup_image_library)
 
         ##############################################################################################################
         # the following config is related to the prompt  library with ground truth
@@ -533,7 +534,7 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Test(BaseDataset)
     def __init__(
             self, 
             cfg: Any, 
-            unsup_prompt_library: List, 
+            unsup_image_library: List, 
             sup_obj_library: List,
             guidance_processor = None,
             condition_processor = None,
@@ -541,7 +542,7 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Test(BaseDataset)
         ) -> None:
         super().__init__(
             cfg, 
-            unsup_prompt_library, 
+            unsup_image_library, 
             sup_obj_library,
             guidance_processor,
             condition_processor
@@ -589,11 +590,11 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Test(BaseDataset)
                 elevation_deg, self.cfg.eval_camera_distance
             )
 
-            prompt = self.unsup_prompt_library[idx]
+            image_path = self.unsup_image_library[idx]
             return {
-                "prompt": prompt,
-                "guidance_utils": self.guidance_processor(prompts = prompt),
-                "condition_utils": self.condition_processor(prompts = prompt),
+                "image_path": image_path.replace("/", "_"),
+                "guidance_utils": self.guidance_processor(image_paths = image_path),
+                "condition_utils": self.condition_processor(image_paths = image_path),
                 "azimuths_deg": azimuth_deg,
                 "elevations_deg": elevation_deg,
                 "distances": camera_distances,
@@ -721,14 +722,14 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
     def __init__(
             self, 
             cfg: Any, 
-            unsup_prompt_library: List, 
+            unsup_image_library: List, 
             sup_obj_library: List,
             guidance_processor = None,
             condition_processor = None,
         ) -> None:
         super().__init__(
             cfg, 
-            unsup_prompt_library, 
+            unsup_image_library, 
             sup_obj_library,
             guidance_processor,
             condition_processor
@@ -894,7 +895,6 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
 
                 ##############################################################################################################
                 # sample azimuth angles, ensures sampled azimuth angles in a batch cover the whole range
-                import pdb; pdb.set_trace()
                 # azimuth_deg: Float[Tensor, "B"] = (
                 #     torch.rand(real_batch_size).reshape(-1, 1)
                 #     + torch.arange(self.cfg.n_view).reshape(1, -1)
@@ -908,11 +908,12 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
 
                 ##############################################################################################################
                 # sample fovs from a uniform distribution bounded by fov_range
-                fovy_deg: Float[Tensor, "B"] = (
-                    torch.rand(real_batch_size) * (self.fovy_range[1] - self.fovy_range[0])
-                    + self.fovy_range[0]
-                ).repeat_interleave(self.cfg.n_view, dim=0)
-                # fovy = fovy_deg * math.pi / 180
+                if not is_ortho:
+                    fovy_deg: Float[Tensor, "B"] = (
+                        torch.rand(real_batch_size) * (self.fovy_range[1] - self.fovy_range[0])
+                        + self.fovy_range[0]
+                    ).repeat_interleave(self.cfg.n_view, dim=0)
+                    # fovy = fovy_deg * math.pi / 180
 
                 ##############################################################################################################
                 # sample distances from a uniform distribution bounded by distance_range
@@ -925,20 +926,24 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
                 #################################################################################################
                 # sample the prompt
                 idx = np.random.randint(0, self.unsup_length)
-                prompt = self.unsup_prompt_library[idx]
+                image_path = self.unsup_image_library[idx]
 
-
-                return_list.append(
-                    {
-                        "prompt": prompt,
-                        "guidance_utils": self.guidance_processor(prompts = prompt),
-                        "condition_utils": self.condition_processor(prompts = prompt),
+                return_dict = {
+                        "image_path": image_path.replace("/", "_"),
+                        "guidance_utils": self.guidance_processor(image_paths = image_path),
+                        "condition_utils": self.condition_processor(image_paths = image_path),
                         # camera data
                         "azimuths_deg": azimuth_deg,
                         "elevations_deg": elevation_deg,
                         "distances": camera_distances,
-                        "fovys_deg": fovy_deg
                     }
+                if not is_ortho:
+                    return_dict.update({
+                        "fovys_deg": fovy_deg
+                    })
+
+                return_list.append(
+                    return_dict
                 )
             return return_list
         
@@ -959,7 +964,6 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
             #         elevation_deg=batch.pop("elevations_deg").view(-1), # the following items are popped
             #         azimuth_deg=batch.pop("azimuths_deg").view(-1),
             #         camera_distances=batch.pop("distances").view(-1),
-            #         fovy_deg=batch.pop("fovys_deg").view(-1),
             #         phase="train"
             #     )
             # )
@@ -992,7 +996,7 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
         return return_list
             
             
-@register("multiview-multiprompt-dualrenderer-multistep-datamodule-v2-wonder3D")
+@register("multiview-multiimage-dualrenderer-multistep-datamodule-v2-wonder3D")
 class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule):
     cfg: MultiviewMultipromptDualRendererMultiStepDataModuleConfig
 
@@ -1002,11 +1006,11 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
         ##############################################################################################################
         # load the prompt library
         path = os.path.join(
-            self.cfg.prompt_library_dir, 
-            self.cfg.prompt_library) \
-                + "." + self.cfg.prompt_library_format
+            self.cfg.image_library_dir, 
+            self.cfg.image_library) \
+                + "." + self.cfg.image_library_format
         with open(path, "r") as f:
-            self.unsup_prompt_library = json.load(f)
+            self.unsup_image_library = json.load(f)
         
         ##############################################################################################################
         # load the meta json of the supervised data
@@ -1026,20 +1030,12 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
                 self.sup_obj_library = json.load(f)
 
         ##############################################################################################################
-        self.num_workers = 2 # for debugging
+        self.num_workers = 0 # 2 # 0 for debugging
         self.pin_memory = False
         self.prefetch_factor = 2 if self.num_workers > 0 else None
 
         # print the info
-        negative_prompt = self.cfg.guidance_processor.negative_prompt
-        negative_prompt_2nd = self.cfg.guidance_processor.negative_prompt_2nd if hasattr(self.cfg.guidance_processor, "negative_prompt_2nd") else None
-        info = f"Using prompt library located in [{self.cfg.prompt_library}] and obj dataset in [{self.cfg.obj_library}], \n with egative prompt [{negative_prompt}]"
-        if negative_prompt_2nd is not None:
-            info += f" and 2nd negative prompt [{negative_prompt_2nd}]"
-        threestudio.info(info)  
-
-        negative_prompt = self.cfg.condition_processor.negative_prompt
-        info = f"Using condition processor with negative prompt [{negative_prompt}]"
+        info = f"Using image library located in [{self.cfg.image_library}] and obj dataset in [{self.cfg.obj_library}]."
         threestudio.info(info)
 
 
@@ -1055,22 +1051,22 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
 
         if stage in (None, "fit"):
             # prepare the dataset
-            prompt_lists = self.unsup_prompt_library["train"] \
-                + self.unsup_prompt_library["val"] \
-                + self.unsup_prompt_library["test"] \
+            prompt_lists = self.unsup_image_library["train"] \
+                + self.unsup_image_library["val"] \
+                + self.unsup_image_library["test"] \
                 + [obj['caption'] for obj in self.sup_obj_library["train"].values()] \
                 + [obj['caption'] for obj in self.sup_obj_library["val"].values()] \
                 + [obj['caption'] for obj in self.sup_obj_library["test"].values()]
-            self.condition_processor.prepare_text_embeddings(
+            self.condition_processor.prepare_image_encodings(
                 prompt_lists
             )
-            self.guidance_processor.prepare_text_embeddings(
+            self.guidance_processor.prepare_image_encodings(
                 prompt_lists
             )
             
             self.train_dataset = MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(
                 self.cfg, 
-                unsup_prompt_library= self.unsup_prompt_library["train"],
+                unsup_image_library= self.unsup_image_library["train"],
                 sup_obj_library=self.sup_obj_library["train"],
                 guidance_processor=self.guidance_processor,
                 condition_processor=self.condition_processor
@@ -1078,18 +1074,18 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
 
         if stage in (None, "fit", "validate"):
             # prepare the dataset
-            prompt_lists = self.unsup_prompt_library["val"] \
+            prompt_lists = self.unsup_image_library["val"] \
                 + [obj['caption'] for obj in self.sup_obj_library["val"].values()]
-            self.condition_processor.prepare_text_embeddings(
+            self.condition_processor.prepare_image_encodings(
                 prompt_lists
             )
-            self.guidance_processor.prepare_text_embeddings(
+            self.guidance_processor.prepare_image_encodings(
                 prompt_lists
             )
 
             self.val_dataset = MultiviewMultipromptDualRendererSemiSupervisedDataModule4Test(
                 self.cfg, 
-                unsup_prompt_library= self.unsup_prompt_library["val"],
+                unsup_image_library= self.unsup_image_library["val"],
                 sup_obj_library=self.sup_obj_library["val"],
                 guidance_processor=self.guidance_processor,
                 condition_processor=self.condition_processor,
@@ -1102,18 +1098,18 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
                 # fix the prompt during evaluation
                 raise NotImplementedError
             else:
-                prompt_lists = self.unsup_prompt_library["test"] \
+                prompt_lists = self.unsup_image_library["test"] \
                     + [obj['caption'] for obj in self.sup_obj_library["test"].values()]
-            self.condition_processor.prepare_text_embeddings(
+            self.condition_processor.prepare_image_encodings(
                 prompt_lists
             )
-            self.guidance_processor.prepare_text_embeddings(
+            self.guidance_processor.prepare_image_encodings(
                 prompt_lists
             )
             
             self.test_dataset = MultiviewMultipromptDualRendererSemiSupervisedDataModule4Test(
                 self.cfg, 
-                unsup_prompt_library= self.unsup_prompt_library["test"],
+                unsup_image_library= self.unsup_image_library["test"],
                 sup_obj_library=self.sup_obj_library["test"],
                 guidance_processor=self.guidance_processor,
                 condition_processor=self.condition_processor,

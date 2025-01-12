@@ -40,6 +40,9 @@ class MultiRefProcessor(BaseObject):
         use_cache: bool = True
         spawn: bool = False
 
+        # the following attributes are for image processing
+        image_root_dir: str = ""
+
         use_latent: bool = True
         use_embed_global: bool = True
         use_embed_local: bool = False
@@ -186,7 +189,6 @@ class MultiRefProcessor(BaseObject):
             **kwargs
         ) -> None:
 
-        import pdb; pdb.set_trace()
         os.makedirs(self._cache_dir, exist_ok=True)
 
         rank = get_rank(opposite=True)
@@ -196,7 +198,12 @@ class MultiRefProcessor(BaseObject):
             all_image_paths = all_image_paths[rank::num_gpus]
 
         image_paths_to_process = []
-        for image_path in all_image_paths:
+        for image_path in tqdm(all_image_paths, desc="Checking existing image embeddings"):
+            
+            assert os.path.exists(
+                os.path.join(self.cfg.image_root_dir, image_path)
+            ), f"Image path {image_path} does not exist"
+
             if self.cfg.use_cache:
                 
                 # some image encodings are already in cache
