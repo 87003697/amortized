@@ -232,7 +232,7 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
     ):
         super().__init__()
 
-        assert lora_type in ["hexa_v1", "vanilla", "none"], "The LoRA type is not supported."
+        assert lora_type in ["hexa_v1", "vanilla", "none", "basic"], "The LoRA type is not supported."
 
         self.hidden_size = hidden_size
         self.rank = rank
@@ -275,7 +275,7 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             self.to_v_yz_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_out_yz_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
 
-        elif lora_type in ["vanilla"]:
+        elif lora_type in ["vanilla", "basic"]:
             self.to_q_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_k_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_v_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
@@ -324,7 +324,7 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             # lora for yz plane texture
             _query_new[5::6] = self.to_q_yz_lora_tex(hidden_states[5::6])
             query = query + scale * _query_new
-        elif self.lora_type in ["vanilla"]:
+        elif self.lora_type in ["vanilla", "basic"]:
             query = attn.to_q(hidden_states) + scale * self.to_q_lora(hidden_states)
         elif self.lora_type in ["none"]:
             query = attn.to_q(hidden_states)
@@ -373,7 +373,7 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             _value_new[5::6] = self.to_v_yz_lora_tex(encoder_hidden_states[5::6])
             value = value + scale * _value_new
 
-        elif self.lora_type in ["vanilla", ]:
+        elif self.lora_type in ["vanilla", "basic"]:
             key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(encoder_hidden_states)
             value = attn.to_v(encoder_hidden_states) + scale * self.to_v_lora(encoder_hidden_states)
             
@@ -388,7 +388,7 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
         # attention scores
 
         # in self-attention, query of each plane should be used to calculate the attention scores of all planes
-        if self.lora_type in ["hexa_v1", "vanilla", "none"]:
+        if self.lora_type in ["hexa_v1", "vanilla",]:
             query = attn.head_to_batch_dim(
                 query.view(batch_size // 6, sequence_length * 6, self.hidden_size)
             ) 
@@ -404,6 +404,14 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             hidden_states = attn.batch_to_head_dim(hidden_states)
             # split the hidden states into 6 planes
             hidden_states = hidden_states.view(batch_size, sequence_length, self.hidden_size)
+        elif self.lora_type in ["none", "basic"]:
+            query = attn.head_to_batch_dim(query)
+            key = attn.head_to_batch_dim(key)
+            value = attn.head_to_batch_dim(value)
+            # calculate the attention scores
+            attention_probs = attn.get_attention_scores(query, key, attention_mask)
+            hidden_states = torch.bmm(attention_probs, value)
+            hidden_states = attn.batch_to_head_dim(hidden_states)
         else:
             raise NotImplementedError("The LoRA type is not supported for attention scores calculation in HplaneSelfAttentionLoRAAttnProcessor.")
 
@@ -425,7 +433,7 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             # lora for yz plane texture
             _hidden_states_new[5::6] = self.to_out_yz_lora_tex(hidden_states[5::6])
             hidden_states = hidden_states + scale * _hidden_states_new
-        elif self.lora_type in ["vanilla",]:
+        elif self.lora_type in ["vanilla", "basic"]:
             hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(hidden_states)
         elif self.lora_type in ["none",]:
             hidden_states = attn.to_out[0](hidden_states)
@@ -679,6 +687,7 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
         locon_type: str = "hexa_v1"
         prompt_bias: bool = False
         prompt_bias_lr_multiplier: float = 1.0
+        vae_attn_type: str = "vanilla"
 
     cfg: Config
 
@@ -767,7 +776,7 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
                 lora_attn_procs = self._set_attn_processor(
                     self.vae, 
                     self_attn_name="processor",
-                    self_lora_type="vanilla", # hard-coded for vae decoder
+                    self_lora_type=self.cfg.vae_attn_type, # hard-coded for vae 
                     cross_lora_type="vanilla"
                 )
                 self.vae.set_attn_processor(lora_attn_procs)
