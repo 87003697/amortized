@@ -850,12 +850,12 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
         if not is_dual:
             return {
                 "loss_asd": self.era3d_weight * (
-                    self.cfg.era3d_normal_weight * normal_loss_era3d + \
-                    self.cfg.era3d_color_weight * color_loss_era3d
+                    self.era3d_normal_weight * normal_loss_era3d + \
+                    self.era3d_color_weight * color_loss_era3d
                 ),
                 "grad_asd": self.era3d_weight * (
-                    self.cfg.era3d_normal_weight * normal_grad_norm_era3d + \
-                    self.cfg.era3d_color_weight * color_grad_norm_era3d
+                    self.era3d_normal_weight * normal_grad_norm_era3d + \
+                    self.era3d_color_weight * color_grad_norm_era3d
                 )
             }
         else:
@@ -864,12 +864,12 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
             grad_norm = 0
 
             loss += self.era3d_weight * (
-                self.cfg.era3d_normal_weight * normal_loss_era3d[0] + \
-                self.cfg.era3d_color_weight * color_loss_era3d[0]
+                self.era3d_normal_weight * normal_loss_era3d[0] + \
+                self.era3d_color_weight * color_loss_era3d[0]
             )
             grad_norm += self.era3d_weight * (
-                self.cfg.era3d_normal_weight * normal_grad_norm_era3d[0] + \
-                self.cfg.era3d_color_weight * color_grad_norm_era3d[0]
+                self.era3d_normal_weight * normal_grad_norm_era3d[0] + \
+                self.era3d_color_weight * color_grad_norm_era3d[0]
             )
 
             guidance_1st = {
@@ -882,12 +882,12 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
             grad_norm = 0
 
             loss += self.era3d_weight * (
-                self.cfg.era3d_normal_weight * normal_loss_era3d[1] + \
-                self.cfg.era3d_color_weight * color_loss_era3d[1]
+                self.era3d_normal_weight * normal_loss_era3d[1] + \
+                self.era3d_color_weight * color_loss_era3d[1]
             )
             grad_norm += self.era3d_weight * (
-                self.cfg.era3d_normal_weight * normal_grad_norm_era3d[1] + \
-                self.cfg.era3d_color_weight * color_grad_norm_era3d[1]
+                self.era3d_normal_weight * normal_grad_norm_era3d[1] + \
+                self.era3d_color_weight * color_grad_norm_era3d[1]
             )
 
             guidance_2nd = {
@@ -903,6 +903,9 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
         
         # update the weights and min/max step for each module ################################################################################################
         self.era3d_weight = C(self.cfg.era3d_weight, epoch, global_step)
+        self.era3d_color_weight = C(self.cfg.era3d_color_weight, epoch, global_step)
+        self.era3d_normal_weight = C(self.cfg.era3d_normal_weight, epoch, global_step)
+
         self.era3d_min_step = int(self.num_train_timesteps * C(self.cfg.era3d_min_step_percent, epoch, global_step))
         self.era3d_max_step = int(self.num_train_timesteps * C(self.cfg.era3d_max_step_percent, epoch, global_step))
 
