@@ -217,7 +217,7 @@ class MultiRefProcessor(BaseObject):
                 if self.cfg.use_latent:
                     cache_path_latent = os.path.join(
                         self._cache_dir,
-                        f"{hash_prompt(self.cfg.pretrained_model_name_or_path, image_path, 'latent')}.pt",
+                        f"{hash_image(self.cfg.pretrained_model_name_or_path, image_path, self.cfg.image_size,'latent')}.pt",
                     )
                     if not os.path.exists(cache_path_latent):
                         latent_pass = False
@@ -226,7 +226,7 @@ class MultiRefProcessor(BaseObject):
                 if self.cfg.use_embed_global:
                     cache_path_embed = os.path.join(
                         self._cache_dir,
-                        f"{hash_prompt(self.cfg.pretrained_model_name_or_path, image_path, 'global')}.pt",
+                        f"{hash_image(self.cfg.pretrained_model_name_or_path, image_path, self.cfg.image_size,'global')}.pt",
                     )
                     if not os.path.exists(cache_path_embed):
                         embed_global_pass = False
@@ -235,11 +235,10 @@ class MultiRefProcessor(BaseObject):
                 if self.cfg.use_embed_local:
                     cache_path_embed = os.path.join(
                         self._cache_dir,
-                        f"{hash_prompt(self.cfg.pretrained_model_name_or_path, image_path, 'local')}.pt",
+                        f"{hash_image(self.cfg.pretrained_model_name_or_path, image_path, self.cfg.image_size,'local')}.pt",
                     )
                     if not os.path.exists(cache_path_embed):
                         embed_local_pass = False
-
 
                 if latent_pass and embed_global_pass and embed_local_pass:
                     threestudio.debug(

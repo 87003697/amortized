@@ -308,34 +308,6 @@ class StableUnclipCallableProcessor(MultiRefProcessor):
         del pipeline
         cleanup()
 
-    # def image_to_encoding(
-    #     images: List[Image.Image],
-    #     feature_extractor_dict: Dict[str, nn.Module],
-    #     image_encoder: CLIPVisionModelWithProjection,
-    #     vae: AutoencoderKL,
-    #     device: str = "cuda"
-    # ):
-    #     if type(images) is not list:
-    #         images = [images]
-
-    #     # CLIP Encoder
-    #     feat = feature_extractor(
-    #         images=images,
-    #         return_tensors="pt"
-    #     ).pixel_values.to(device)
-    #     feat = image_encoder(feat)
-
-    #     # VAE Encoder
-    #     image_pt = torch.stack(
-    #             [
-    #                 TF.to_tensor(image) for image in images
-    #             ],
-    #             dim=0
-    #         ).to(dtype=vae.dtype, device=device)
-    #     image_pt = image_pt * 2 - 1
-    #     image_latents = vae.encode(image_pt).latent_dist.mode() * vae.config.scaling_factor
-        
-    #     return feat.image_embeds, feat.last_hidden_state, image_latents
 
     def spawn_func_text(
         self, 

@@ -1028,7 +1028,7 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
                 self.sup_obj_library = json.load(f)
 
         ##############################################################################################################
-        self.num_workers = 0 # 2 # 0 for debugging
+        self.num_workers = 2 # 0 for debugging
         self.pin_memory = False
         self.prefetch_factor = 2 if self.num_workers > 0 else None
 
