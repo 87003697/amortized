@@ -22,7 +22,7 @@ from threestudio.models.prompt_processors.base import (
 from threestudio.utils.misc import get_rank
 
 from itertools import cycle
-from .utils import hash_prompt, _load_image_embedding, _load_prompt_embedding_v2 as _load_prompt_embedding
+from .utils import hash_prompt, hash_image, _load_image_embedding, _load_prompt_embedding_v2 as _load_prompt_embedding
 
 from functools import partial
 from tqdm import tqdm
@@ -46,6 +46,8 @@ class MultiRefProcessor(BaseObject):
         use_latent: bool = True
         use_embed_global: bool = True
         use_embed_local: bool = False
+
+        default_prompt: str = ""
 
     cfg: Config
 
@@ -101,7 +103,6 @@ class MultiRefProcessor(BaseObject):
         **kwargs
     ) -> None:
 
-        assert self.cfg.use_latent is False, "Latent embeddings are not supported for text embeddings"
         os.makedirs(self._cache_dir, exist_ok=True)
 
         rank = get_rank(opposite=True)
@@ -113,7 +114,10 @@ class MultiRefProcessor(BaseObject):
 
         # add negative prompt to the list for rank 0
         if rank == 0:
-            all_prompts += [self.cfg.negative_prompt]
+            if hasattr(self.cfg, "default_prompt") and self.cfg.default_prompt is not None:
+                all_prompts += [self.cfg.default_prompt]
+            if hasattr(self.cfg, "negative_prompt") and self.cfg.negative_prompt is not None:
+                all_prompts += [self.cfg.negative_prompt]
             # add other prompts, if any
             if hasattr(self.cfg, "other_prompts") and self.cfg.other_prompts is not None:
                 try:
@@ -281,7 +285,6 @@ class MultiRefProcessor(BaseObject):
             **kwargs
         ) -> None:
 
-        assert self.cfg.use_latent is False, "Latent embeddings are not supported for text embeddings"
         if self.cfg.use_embed_global:
             text_embedding_global_list = []
         if self.cfg.use_embed_local:
@@ -348,6 +351,7 @@ class MultiRefProcessor(BaseObject):
                     load_latent=self.cfg.use_latent,
                     load_embed_global=self.cfg.use_embed_global,
                     load_embed_local=self.cfg.use_embed_local,
+                    image_size = self.cfg.image_size if hasattr(self.cfg, "image_size") else 256,
                 ),
                 image_path_batch,
             ):
@@ -380,10 +384,14 @@ class MultiRefProcessor(BaseObject):
             if isinstance(image_paths, str):
                 image_paths = [image_paths]
             
-            prompt_args  = self.load_image_encoding(image_paths, **kwargs)
-
+            image_args  = self.load_image_encoding(image_paths, **kwargs)
+            prompt_args = self.load_text_encoding(
+                [self.cfg.default_prompt],
+                **kwargs
+            )
             return MultiRefProcessorOutput4Image(
                 device=self.device,
+                **image_args,
                 **prompt_args,
             )
         
@@ -479,6 +487,9 @@ class MultiRefProcessorOutput4Image:
     image_embeddings_global: Optional[List[Float[Tensor, "B ..."]]] = None
     image_embeddings_local: Optional[List[Float[Tensor, "B ..."]]] = None
     
+    text_embeddings_global: Optional[List[Float[Tensor, "B ..."]]] = None
+    text_embeddings_local: Optional[List[Float[Tensor, "B ..."]]] = None
+
     # must have the following attributes
     device: str = "cuda"
 
@@ -487,6 +498,8 @@ class MultiRefProcessorOutput4Image:
             "image_latents",
             "image_embeddings_global",
             "image_embeddings_local",
+            "text_embeddings_global",
+            "text_embeddings_local",
         ]
     )
 
@@ -533,6 +546,16 @@ class MultiRefProcessorOutput4Image:
         if self.image_embeddings_local is not None:
             return_dict["image_embeddings_local"] = torch.stack(
                 self.image_embeddings_local, 
+                dim=0
+            ).to(self.device)
+        if self.text_embeddings_global is not None:
+            return_dict["text_embeddings_global"] = torch.stack(
+                self.text_embeddings_global, 
+                dim=0
+            ).to(self.device)
+        if self.text_embeddings_local is not None:
+            return_dict["text_embeddings_local"] = torch.stack(
+                self.text_embeddings_local, 
                 dim=0
             ).to(self.device)
         return return_dict

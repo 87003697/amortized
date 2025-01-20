@@ -46,6 +46,7 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
         isosurface_method: str = "mt" # "mt" or "mc-cpu"
 
         enable_bg_rays: bool = False
+        normal_direction: str = "camera" # "camera" or "world" or "front"
 
         # sdf forcing strategy for generative space
         sdf_grad_shrink: float = 1.
@@ -204,56 +205,83 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
             )
             out.update({"comp_normal": gb_normal_aa})  # in [0, 1]
 
-            # for compatibility with RichDreamer #############
-            # camera_batch_v_nrm = torch.repeat_interleave(mesh.v_nrm[None, ...], num_views_per_batch, dim=0)
-            bg_normal = 0.5 * torch.ones_like(gb_normal)
-            bg_normal[..., 2] = 1.0
-            bg_normal_white = torch.ones_like(gb_normal)
+            if self.cfg.normal_direction == "camera":
+                # for compatibility with RichDreamer #############
+                # camera_batch_v_nrm = torch.repeat_interleave(mesh.v_nrm[None, ...], num_views_per_batch, dim=0)
+                bg_normal = 0.5 * torch.ones_like(gb_normal)
+                bg_normal[..., 2] = 1.0
+                bg_normal_white = torch.ones_like(gb_normal)
 
-            # convert_normal_to_cam_space
-            w2c: Float[Tensor, "B 4 4"] = torch.inverse(
-                c2w[
-                    (batch_idx) * num_views_per_batch : 
-                    (batch_idx + 1) * num_views_per_batch
-                ]
-            )
-            rotate: Float[Tensor, "B 3 3"] = w2c[:, :3, :3]
-            # camera_batch_v_nrm = camera_batch_v_nrm @ rotate.permute(0, 2, 1)
-            # gb_normal: B H W 3 -> B H W 1 3; rotate: B 3 3 -> B 1 1 3 3
-            gb_normal_cam = gb_normal[..., None, :] @ rotate.permute(0, 2, 1)[..., None, None, :, :]
-            flip_x = torch.eye(3).to(w2c) # pixel space flip axis so we need built negative y-axis normal
-            flip_x[0, 0] = -1
-            # camera_batch_v_nrm = camera_batch_v_nrm @ flip_x[None, ...]
-            # flip_x: B 3 3 -> B 1 1 3 3
-            gb_normal_cam = gb_normal_cam @ flip_x[None, None, None, ...]
-            gb_normal_cam = gb_normal_cam.squeeze(-2)
-            gb_normal_cam = F.normalize(gb_normal_cam, dim=-1)
-            gb_normal_cam = (gb_normal_cam + 1.0) / 2.0
+                # convert_normal_to_cam_space
+                w2c: Float[Tensor, "B 4 4"] = torch.inverse(
+                    c2w[
+                        (batch_idx) * num_views_per_batch : 
+                        (batch_idx + 1) * num_views_per_batch
+                    ]
+                )
+                rotate: Float[Tensor, "B 3 3"] = w2c[:, :3, :3]
+                # camera_batch_v_nrm = camera_batch_v_nrm @ rotate.permute(0, 2, 1)
+                # gb_normal: B H W 3 -> B H W 1 3; rotate: B 3 3 -> B 1 1 3 3
+                gb_normal_cam = gb_normal[..., None, :] @ rotate.permute(0, 2, 1)[..., None, None, :, :]
+                flip_x = torch.eye(3).to(w2c) # pixel space flip axis so we need built negative y-axis normal
+                flip_x[0, 0] = -1
+                # camera_batch_v_nrm = camera_batch_v_nrm @ flip_x[None, ...]
+                # flip_x: B 3 3 -> B 1 1 3 3
+                gb_normal_cam = gb_normal_cam @ flip_x[None, None, None, ...]
+                gb_normal_cam = gb_normal_cam.squeeze(-2)
+                gb_normal_cam = F.normalize(gb_normal_cam, dim=-1)
+                gb_normal_cam = (gb_normal_cam + 1.0) / 2.0
 
-            # camera_gb_normal, _ = self.ctx.interpolate(camera_batch_v_nrm, rast, mesh.t_pos_idx)
-            # camera_gb_normal = F.normalize(camera_gb_normal, dim=-1)
-            # camera_gb_normal = (camera_gb_normal + 1.0) / 2.0
+                # camera_gb_normal, _ = self.ctx.interpolate(camera_batch_v_nrm, rast, mesh.t_pos_idx)
+                # camera_gb_normal = F.normalize(camera_gb_normal, dim=-1)
+                # camera_gb_normal = (camera_gb_normal + 1.0) / 2.0
 
-            # render with bg_normal
-            camera_gb_normal_bg = torch.lerp(
-                bg_normal, gb_normal_cam, mask.float()
-            )
-            camera_gb_normal_bg = self.ctx.antialias(
-                camera_gb_normal_bg, rast, v_pos_clip, mesh.t_pos_idx
-            )
+                # render with bg_normal
+                camera_gb_normal_bg = torch.lerp(
+                    bg_normal, gb_normal_cam, mask.float()
+                )
+                camera_gb_normal_bg = self.ctx.antialias(
+                    camera_gb_normal_bg, rast, v_pos_clip, mesh.t_pos_idx
+                )
 
-            # render with bg_normal_white
-            camera_gb_normal_bg_white = torch.lerp(
-                bg_normal_white, gb_normal_cam, mask.float()
-            )
-            camera_gb_normal_bg_white = self.ctx.antialias(
-                camera_gb_normal_bg_white, rast, v_pos_clip, mesh.t_pos_idx
-            )
+                # render with bg_normal_white
+                camera_gb_normal_bg_white = torch.lerp(
+                    bg_normal_white, gb_normal_cam, mask.float()
+                )
+                camera_gb_normal_bg_white = self.ctx.antialias(
+                    camera_gb_normal_bg_white, rast, v_pos_clip, mesh.t_pos_idx
+                )
 
-            out.update({
-                "comp_normal_cam_vis": camera_gb_normal_bg if not is_emtpy else camera_gb_normal_bg.detach(),
-                "comp_normal_cam_vis_white": camera_gb_normal_bg_white if not is_emtpy else camera_gb_normal_bg_white.detach(),
-            })
+                out.update({
+                    "comp_normal_cam_vis": camera_gb_normal_bg if not is_emtpy else camera_gb_normal_bg.detach(),
+                    "comp_normal_cam_vis_white": camera_gb_normal_bg_white if not is_emtpy else camera_gb_normal_bg_white.detach(),
+                })
+
+            elif self.cfg.normal_direction == "front":
+                # for compatibility with Wonder3D and Era3D #############
+                bg_normal_white = torch.ones_like(gb_normal)
+
+                # convert_normal_to_cam_space of the front view
+                c2w_front: Float[Tensor, "B 4 4"] = c2w[batch_idx * num_views_per_batch][None, ...].repeat(num_views_per_batch, 1, 1)
+                w2c_front: Float[Tensor, "B 4 4"] = torch.inverse(c2w_front)
+                rotate_front: Float[Tensor, "B 3 3"] = w2c_front[:, :3, :3]
+                gb_normal_cam = gb_normal[..., None, :] @ rotate_front.permute(0, 2, 1)[..., None, None, :, :]
+
+                gb_normal_cam = gb_normal_cam.squeeze(-2)
+                gb_normal_cam = F.normalize(gb_normal_cam, dim=-1)
+                gb_normal_cam = (gb_normal_cam + 1.0) / 2.0
+
+                # render with bg_normal_white
+                camera_gb_normal_bg_white = torch.lerp(
+                    bg_normal_white, gb_normal_cam, mask.float()
+                )
+                camera_gb_normal_bg_white = self.ctx.antialias(
+                    camera_gb_normal_bg_white, rast, v_pos_clip, mesh.t_pos_idx
+                )
+
+                out.update({
+                    "comp_normal_cam_vis_white": camera_gb_normal_bg_white if not is_emtpy else camera_gb_normal_bg_white.detach(),
+                })
 
             if render_rgb:
 

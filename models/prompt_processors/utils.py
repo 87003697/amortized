@@ -6,6 +6,10 @@ def hash_prompt(model: str, prompt: str, type: str) -> str:
     identifier = f"{model}-{prompt}-{type}"
     return hashlib.md5(identifier.encode()).hexdigest()
 
+def hash_image(model: str, image_path: str, size: tuple, type: str) -> str:
+    size = f"{size[0]}x{size[1]}"
+    identifier = f"{model}-{image_path}-{size}-{type}"
+    return hashlib.md5(identifier.encode()).hexdigest()
 
 def load_from_cache_text(cache_dir, pretrained_model_name_or_path, prompt, load_local=False, load_global=False, ):
         # load global text embedding
@@ -98,6 +102,7 @@ def _load_prompt_embedding_v2(
 def _load_image_embedding(
         image_path, cache_dir, pretrained_model_name_or_path, 
         load_latent=True, load_embed_global=True, load_embed_local=False,
+        image_size = 256
     ):
     """
         Load the image encodings for a single image
@@ -110,11 +115,11 @@ def _load_image_embedding(
     if load_latent:
         cache_path = os.path.join(
             cache_dir,
-            f"{hash_prompt(pretrained_model_name_or_path, image_path, 'latent')}.pt",
+            f"{hash_image(pretrained_model_name_or_path, image_path, image_size, 'latent')}.pt",
         )
         if not os.path.exists(cache_path):
             raise FileNotFoundError(
-                f"Image latent file {cache_path} for model {pretrained_model_name_or_path} and image [{image_path}] not found."
+                f"Image latent file {cache_path} for model {pretrained_model_name_or_path} and image [{image_path}] with size [{image_size}] not found."
             )
         image_latent = torch.load(cache_path, map_location='cpu')
         return_dict["image_latent"] = image_latent
@@ -123,11 +128,11 @@ def _load_image_embedding(
     if load_embed_global:
         cache_path = os.path.join(
             cache_dir,
-            f"{hash_prompt(pretrained_model_name_or_path, image_path, 'global')}.pt",
+            f"{hash_image(pretrained_model_name_or_path, image_path, image_size, 'global')}.pt",
         )
         if not os.path.exists(cache_path):
             raise FileNotFoundError(
-                f"Image embedding file {cache_path} for model {pretrained_model_name_or_path} and image [{image_path}] not found."
+                f"Image embedding file {cache_path} for model {pretrained_model_name_or_path} and image [{image_path}] with size [{image_size}] not found."
             )
         image_embedding_global = torch.load(cache_path, map_location='cpu')
         return_dict["image_embedding_global"] = image_embedding_global
@@ -135,11 +140,11 @@ def _load_image_embedding(
     if load_embed_local:
         cache_path = os.path.join(
             cache_dir,
-            f"{hash_prompt(pretrained_model_name_or_path, image_path, 'local')}.pt",
+            f"{hash_image(pretrained_model_name_or_path, image_path, image_size, 'local')}.pt",
         )
         if not os.path.exists(cache_path):
             raise FileNotFoundError(
-                f"Image embedding file {cache_path} for model {pretrained_model_name_or_path} and image [{image_path}] not found."
+                f"Image embedding file {cache_path} for model {pretrained_model_name_or_path} and image [{image_path}] with size [{image_size}] not found."
             )
         image_embedding_local = torch.load(cache_path, map_location='cpu')
         return_dict["image_embedding_local"] = image_embedding_local

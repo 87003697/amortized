@@ -67,6 +67,8 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
         # for balancing the low-res and high-res gradients
         rgb_grad_shrink: float = 1.0
 
+        # for rendering the normal
+        normal_direction: str = "camera"  # "front" or "camera" or "world"
 
     cfg: Config
 
@@ -90,6 +92,8 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
         # if the resolution is too high, we need to chunk the training
         self.chunk_training = self.cfg.train_chunk_size > 0
 
+        assert self.cfg.normal_direction in ["front", "camera", "world"], "normal_direction must be in ['front', 'camera', 'world']"
+
 
     def forward(
         self,
@@ -111,6 +115,7 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
                 text_embed = text_embed,
             )
 
+        # self.training = True #  for debugging
         if self.training:
             if batch_size_space_cache != batch_size:
                 # copy the space cache in training
@@ -216,6 +221,9 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
             .reshape(-1, 3)
         )
         n_rays = rays_o_flatten.shape[0]
+
+        batch_size_space_cache = text_embed.shape[0] if text_embed is not None else batch_size
+        num_views_per_batch = batch_size // batch_size_space_cache
 
         # important for generative space
         if space_cache is None:
@@ -464,37 +472,62 @@ class GenerativeSpaceVolSDFVolumeRenderer(NeuSVolumeRenderer):
             )
 
             comp_normal = F.normalize(comp_normal, dim=-1)
-            comp_normal_mask = torch.lerp(
-                torch.zeros_like(comp_normal), (comp_normal + 1.0) / 2.0, opacity
-            )
-
-            # for compatibility with RichDreamer #############
-            bg_normal = 0.5 * torch.ones_like(comp_normal)
-            bg_normal[:, 2] = 1.0 # for a blue background
-            bg_normal_white = torch.ones_like(comp_normal)
-
-            # comp_normal_vis = (comp_normal + 1.0) / 2.0 * opacity + (1 - opacity) * bg_normal
-
-            # convert_normal_to_cam_space
-            w2c: Float[Tensor, "B 4 4"] = torch.inverse(c2w)
-            rot: Float[Tensor, "B 3 3"] = w2c[:, :3, :3]
-            comp_normal_cam = comp_normal.view(batch_size, -1, 3) @ rot.permute(0, 2, 1)
-            flip_x = torch.eye(3, device=comp_normal_cam.device) #  pixel space flip axis so we need built negative y-axis normal
-            flip_x[0, 0] = -1
-            comp_normal_cam = comp_normal_cam @ flip_x[None, :, :]
-            comp_normal_cam = comp_normal_cam.view(-1, 3) # reshape back to (Nr, 3)
-
-            comp_normal_cam_vis = (comp_normal_cam + 1.0) / 2.0 * opacity + (1 - opacity) * bg_normal
-            comp_normal_cam_vis_white = (comp_normal_cam + 1.0) / 2.0 * opacity + (1 - opacity) * bg_normal_white
-
             out.update(
                 {
-                    "comp_normal": comp_normal_mask.view(batch_size, height, width, 3),
-                    # "comp_normal_vis": comp_normal_vis.view(batch_size, height, width, 3),
-                    "comp_normal_cam_vis": comp_normal_cam_vis.view(batch_size, height, width, 3),
-                    "comp_normal_cam_vis_white": comp_normal_cam_vis_white.view(batch_size, height, width, 3),
+                    "comp_normal": comp_normal.view(batch_size, height, width, 3),
                 }
             )
+
+            if self.cfg.normal_direction == "camera":
+                # for compatibility with RichDreamer #############
+                bg_normal = 0.5 * torch.ones_like(comp_normal)
+                bg_normal[:, 2] = 1.0 # for a blue background
+                bg_normal_white = torch.ones_like(comp_normal)
+
+                # comp_normal_vis = (comp_normal + 1.0) / 2.0 * opacity + (1 - opacity) * bg_normal
+
+                # convert_normal_to_cam_space
+                w2c: Float[Tensor, "B 4 4"] = torch.inverse(c2w)
+                rot: Float[Tensor, "B 3 3"] = w2c[:, :3, :3]
+                comp_normal_cam = comp_normal.view(batch_size, -1, 3) @ rot.permute(0, 2, 1)
+                flip_x = torch.eye(3, device=comp_normal_cam.device) #  pixel space flip axis so we need built negative y-axis normal
+                flip_x[0, 0] = -1
+                comp_normal_cam = comp_normal_cam @ flip_x[None, :, :]
+                comp_normal_cam = comp_normal_cam.view(-1, 3) # reshape back to (Nr, 3)
+
+                comp_normal_cam_vis = (comp_normal_cam + 1.0) / 2.0 * opacity + (1 - opacity) * bg_normal
+                comp_normal_cam_vis_white = (comp_normal_cam + 1.0) / 2.0 * opacity + (1 - opacity) * bg_normal_white
+
+                out.update(
+                    {
+                        "comp_normal_cam_vis": comp_normal_cam_vis.view(batch_size, height, width, 3),
+                        "comp_normal_cam_vis_white": comp_normal_cam_vis_white.view(batch_size, height, width, 3),
+                    }
+                )
+            elif self.cfg.normal_direction == "front":
+
+                # for compatibility with Wonder3D and Era3D #############
+                bg_normal_white = torch.ones_like(comp_normal)
+
+                # convert_normal_to_cam_space of the front view
+                c2w_front = c2w[0::num_views_per_batch].repeat_interleave(num_views_per_batch, dim=0)
+                w2c_front: Float[Tensor, "B 4 4"] = torch.inverse(c2w_front)                
+                rot: Float[Tensor, "B 3 3"] = w2c_front[:, :3, :3]
+                comp_normal_front = comp_normal.view(batch_size, -1, 3) @ rot.permute(0, 2, 1)
+
+                # the following is not necessary for Wonder3D and Era3D
+                # flip_x = torch.eye(3, device=comp_normal_front.device) #  pixel space flip axis so we need built negative y-axis normal
+                # flip_x[0, 0] = -1
+                # comp_normal_front = comp_normal_front @ flip_x[None, :, :]
+                
+                comp_normal_front = comp_normal_front.view(-1, 3) # reshape back to (Nr, 3)
+                comp_normal_front_vis_white = (comp_normal_front + 1.0) / 2.0 * opacity + (1 - opacity) * bg_normal_white
+
+                out.update(
+                    {
+                        "comp_normal_cam_vis_white": comp_normal_front_vis_white.view(batch_size, height, width, 3),
+                    }
+                )
 
         if self.training:
             out.update(

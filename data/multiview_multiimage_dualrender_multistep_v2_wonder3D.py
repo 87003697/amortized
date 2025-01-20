@@ -63,7 +63,7 @@ class MultiviewMultipromptDualRendererMultiStepDataModuleConfig:
     eval_batch_size: int = 1
     n_val_views: int = 1 
     n_test_views: int = 32 
-    n_view:int=4
+    n_view:int=6
     height: int =256
     width: int =256
     ray_height: int = 64
@@ -188,7 +188,7 @@ class BaseDataset(Dataset, Updateable):
         # the following config is fixed for the whole training process
         self.elevation_range: Tuple[float, float] = self.cfg.unsup_elevation_range
         self.azimuth_list: Tuple[float, float] = self.cfg.unsup_azimuth_list
-        self.camera_distance_range: Tuple[float, float] = self.cfg.unsup_camera_distance_list
+        self.camera_distance_list: Tuple[float, float] = self.cfg.unsup_camera_distance_list
         
         ##############################################################################################################
         # the following config is related to the prompt library without ground truth
@@ -285,7 +285,7 @@ class BaseDataset(Dataset, Updateable):
     ) -> Dict[str, Any]:
         # this function is independent of the self.cfg.n_view
 
-        assert elevation_deg.shape == azimuth_deg.shape == camera_distances.shape == fovy_deg.shape
+        assert elevation_deg.shape == azimuth_deg.shape == camera_distances.shape
         batch_size = elevation_deg.shape[0]
 
         azimuth: Float[Tensor, "B"] = azimuth_deg * math.pi / 180
@@ -754,6 +754,8 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
             self.data_schedule = data_schedule
 
         self.sup_or_unsup = "unsup" # the initial value, will be updated in update_step
+        assert len(self.cfg.unsup_azimuth_list) == self.cfg.n_view, "The length of unsup_azimuth_list should be equal to n_view"
+        assert len(self.cfg.unsup_camera_distance_list) == self.cfg.n_view, "The length of unsup_camera_distance_list should be equal to n_view"
 
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
         ##############################################################################################################
@@ -903,7 +905,7 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
                 # ) + self.azimuth_range[
                 #     0
                 # ]
-                azimuth_deg: Float[Tensor, "B"] = self.azimuth_list
+                azimuth_deg: Float[Tensor, "B"] = torch.Tensor(self.azimuth_list)
                 # azimuth: Float[Tensor, "B"] = azimuth_deg * math.pi / 180
 
                 ##############################################################################################################
@@ -917,11 +919,7 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
 
                 ##############################################################################################################
                 # sample distances from a uniform distribution bounded by distance_range
-                camera_distances: Float[Tensor, "B"] = (
-                    torch.rand(real_batch_size)
-                    * (self.camera_distance_range[1] - self.camera_distance_range[0])
-                    + self.camera_distance_range[0]
-                ).repeat_interleave(self.cfg.n_view, dim=0)
+                camera_distances: Float[Tensor, "B"] = torch.Tensor(self.camera_distance_list)
 
                 #################################################################################################
                 # sample the prompt
@@ -976,7 +974,7 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
                         elevation_deg=batch.pop("elevations_deg").view(-1), # the following items are popped
                         azimuth_deg=batch.pop("azimuths_deg").view(-1),
                         camera_distances=batch.pop("distances").view(-1),
-                        fovy_deg=batch.pop("fovys_deg").view(-1),
+                        fovy_deg=batch.pop("fovys_deg").view(-1) if not is_ortho else None, 
                         phase="train",
                         is_ortho=is_ortho
                     )
@@ -1057,11 +1055,19 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
                 + [obj['caption'] for obj in self.sup_obj_library["train"].values()] \
                 + [obj['caption'] for obj in self.sup_obj_library["val"].values()] \
                 + [obj['caption'] for obj in self.sup_obj_library["test"].values()]
+            
             self.condition_processor.prepare_image_encodings(
                 prompt_lists
             )
+            self.condition_processor.prepare_text_embeddings(
+                [] # just a placeholder, to process the default text embeddings
+            )
+
             self.guidance_processor.prepare_image_encodings(
                 prompt_lists
+            )
+            self.guidance_processor.prepare_text_embeddings(
+                [] # just a placeholder, to process the default text embeddings
             )
             
             self.train_dataset = MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(
@@ -1076,11 +1082,19 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
             # prepare the dataset
             prompt_lists = self.unsup_image_library["val"] \
                 + [obj['caption'] for obj in self.sup_obj_library["val"].values()]
+            
             self.condition_processor.prepare_image_encodings(
                 prompt_lists
             )
+            self.guidance_processor.prepare_text_embeddings(
+                [] # just a placeholder, to process the default text embeddings
+            )
+
             self.guidance_processor.prepare_image_encodings(
                 prompt_lists
+            )
+            self.condition_processor.prepare_text_embeddings(
+                [] # just a placeholder, to process the default text embeddings
             )
 
             self.val_dataset = MultiviewMultipromptDualRendererSemiSupervisedDataModule4Test(
@@ -1100,11 +1114,19 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
             else:
                 prompt_lists = self.unsup_image_library["test"] \
                     + [obj['caption'] for obj in self.sup_obj_library["test"].values()]
+            
             self.condition_processor.prepare_image_encodings(
                 prompt_lists
             )
+            self.guidance_processor.prepare_text_embeddings(
+                [] # just a placeholder, to process the default text embeddings
+            )
+
             self.guidance_processor.prepare_image_encodings(
                 prompt_lists
+            )
+            self.condition_processor.prepare_text_embeddings(
+                [] # just a placeholder, to process the default text embeddings
             )
             
             self.test_dataset = MultiviewMultipromptDualRendererSemiSupervisedDataModule4Test(
