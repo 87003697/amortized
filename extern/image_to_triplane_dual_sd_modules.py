@@ -191,13 +191,13 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
     ):
         super().__init__()
 
-        assert lora_type in ["septu_v1", "vanilla", "none", "basic"], "The LoRA type is not supported."
+        assert lora_type in ["septu_v1", "vanilla", "none", "basic", "hexa_v1"], "The LoRA type is not supported."
 
         self.hidden_size = hidden_size
         self.rank = rank
         self.lora_type = lora_type
 
-        if lora_type in ["septu_v1"]:
+        if lora_type in ["septu_v1", "hexa_v1"]:
             # lora for 1st plane geometry
             self.to_q_xy_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_k_xy_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
@@ -234,11 +234,13 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             self.to_v_yz_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_out_yz_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
 
-            # lora for input plane
-            self.to_q_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_k_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_v_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_out_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            if lora_type in ["septu_v1"]:
+                # lora for input plane
+                self.to_q_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+                self.to_k_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+                self.to_v_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+                self.to_out_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+
 
         elif lora_type in ["vanilla", "basic"]:
             self.to_q_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
@@ -292,6 +294,22 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             # lora for input plane
             _query_new[6::7] = self.to_q_inp_lora(hidden_states[6::7])
             query = query + scale * _query_new
+        elif self.lora_type in ["hexa_v1",]:
+            query = attn.to_q(hidden_states)
+            _query_new = torch.zeros_like(query)
+            # lora for xy plane geometry
+            _query_new[0::6] = self.to_q_xy_lora_geo(hidden_states[0::6])
+            # lora for xy plane texture
+            _query_new[3::6] = self.to_q_xy_lora_tex(hidden_states[3::6])
+            # lora for xz plane geometry
+            _query_new[1::6] = self.to_q_xz_lora_geo(hidden_states[1::6])
+            # lora for xz plane texture
+            _query_new[4::6] = self.to_q_xz_lora_tex(hidden_states[4::6])
+            # lora for yz plane geometry
+            _query_new[2::6] = self.to_q_yz_lora_geo(hidden_states[2::6])
+            # lora for yz plane texture
+            _query_new[5::6] = self.to_q_yz_lora_tex(hidden_states[5::6])
+            query = query + scale * _query_new
         elif self.lora_type in ["vanilla", "basic"]:
             query = attn.to_q(hidden_states) + scale * self.to_q_lora(hidden_states)
         elif self.lora_type in ["none"]:
@@ -344,6 +362,38 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             # lora for input plane
             _value_new[6::7] = self.to_v_inp_lora(encoder_hidden_states[6::7])
             value = value + scale * _value_new
+        elif self.lora_type in ["hexa_v1",]:
+            key = attn.to_k(encoder_hidden_states)
+            _key_new = torch.zeros_like(key)
+            # lora for xy plane geometry
+            _key_new[0::6] = self.to_k_xy_lora_geo(encoder_hidden_states[0::6])
+            # lora for xy plane texture
+            _key_new[3::6] = self.to_k_xy_lora_tex(encoder_hidden_states[3::6])
+            # lora for xz plane geometry
+            _key_new[1::6] = self.to_k_xz_lora_geo(encoder_hidden_states[1::6])
+            # lora for xz plane texture
+            _key_new[4::6] = self.to_k_xz_lora_tex(encoder_hidden_states[4::6])
+            # lora for yz plane geometry
+            _key_new[2::6] = self.to_k_yz_lora_geo(encoder_hidden_states[2::6])
+            # lora for yz plane texture
+            _key_new[5::6] = self.to_k_yz_lora_tex(encoder_hidden_states[5::6])
+            key = key + scale * _key_new
+
+            value = attn.to_v(encoder_hidden_states)
+            _value_new = torch.zeros_like(value)
+            # lora for xy plane geometry
+            _value_new[0::6] = self.to_v_xy_lora_geo(encoder_hidden_states[0::6])
+            # lora for xy plane texture
+            _value_new[3::6] = self.to_v_xy_lora_tex(encoder_hidden_states[3::6])
+            # lora for xz plane geometry
+            _value_new[1::6] = self.to_v_xz_lora_geo(encoder_hidden_states[1::6])
+            # lora for xz plane texture
+            _value_new[4::6] = self.to_v_xz_lora_tex(encoder_hidden_states[4::6])
+            # lora for yz plane geometry
+            _value_new[2::6] = self.to_v_yz_lora_geo(encoder_hidden_states[2::6])
+            # lora for yz plane texture
+            _value_new[5::6] = self.to_v_yz_lora_tex(encoder_hidden_states[5::6])
+            value = value + scale * _value_new
 
         elif self.lora_type in ["vanilla", "basic"]:
             key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(encoder_hidden_states)
@@ -360,15 +410,16 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
         # attention scores
 
         # in self-attention, query of each plane should be used to calculate the attention scores of all planes
-        if self.lora_type in ["septu_v1", "vanilla",]:
+        if self.lora_type in ["septu_v1", "vanilla", "hexa_v1"]:
+            num_planes = 7 if batch_size % 7 == 0 else 6
             query = attn.head_to_batch_dim(
-                query.view(batch_size // 7, sequence_length * 7, self.hidden_size)
+                query.view(batch_size // num_planes, sequence_length * num_planes, self.hidden_size)
             ) 
             key = attn.head_to_batch_dim(
-                key.view(batch_size // 7, sequence_length * 7, self.hidden_size)
+                key.view(batch_size // num_planes, sequence_length * num_planes, self.hidden_size)
             )
             value = attn.head_to_batch_dim(
-                value.view(batch_size // 7, sequence_length * 7, self.hidden_size)
+                value.view(batch_size // num_planes, sequence_length * num_planes, self.hidden_size)
             )
             # calculate the attention scores
             attention_probs = attn.get_attention_scores(query, key, attention_mask)
@@ -407,6 +458,22 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             # lora for input plane
             _hidden_states_new[6::7] = self.to_out_inp_lora(hidden_states[6::7])
             hidden_states = hidden_states + scale * _hidden_states_new
+        elif self.lora_type in ["hexa_v1", ]:
+            hidden_states = attn.to_out[0](hidden_states)
+            _hidden_states_new = torch.zeros_like(hidden_states)
+            # lora for xy plane geometry
+            _hidden_states_new[0::6] = self.to_out_xy_lora_geo(hidden_states[0::6])
+            # lora for xy plane texture
+            _hidden_states_new[3::6] = self.to_out_xy_lora_tex(hidden_states[3::6])
+            # lora for xz plane geometry
+            _hidden_states_new[1::6] = self.to_out_xz_lora_geo(hidden_states[1::6])
+            # lora for xz plane texture
+            _hidden_states_new[4::6] = self.to_out_xz_lora_tex(hidden_states[4::6])
+            # lora for yz plane geometry
+            _hidden_states_new[2::6] = self.to_out_yz_lora_geo(hidden_states[2::6])
+            # lora for yz plane texture
+            _hidden_states_new[5::6] = self.to_out_yz_lora_tex(hidden_states[5::6])
+            hidden_states = hidden_states + scale * _hidden_states_new
         elif self.lora_type in ["vanilla", "basic"]:
             hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(hidden_states)
         elif self.lora_type in ["none",]:
@@ -444,13 +511,13 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
     ):
         super().__init__()
 
-        assert lora_type in ["septu_v1", "vanilla", "none"], "The LoRA type is not supported."
+        assert lora_type in ["septu_v1", "vanilla", "none", "hexa_v1"], "The LoRA type is not supported."
 
         self.hidden_size = hidden_size
         self.rank = rank
         self.lora_type = lora_type
 
-        if lora_type in ["septu_v1"]:
+        if lora_type in ["septu_v1","hexa_v1"]:
             # lora for 1st plane geometry
             self.to_q_xy_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_k_xy_lora_geo = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
@@ -487,11 +554,12 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             self.to_v_yz_lora_tex = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
             self.to_out_yz_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
 
-            # lora for input plane
-            self.to_q_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_k_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_v_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_out_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            if lora_type in ["septu_v1"]:
+                # lora for input plane
+                self.to_q_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+                self.to_k_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+                self.to_v_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+                self.to_out_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
 
         elif lora_type in ["vanilla"]:
             # lora for all planes
@@ -544,6 +612,22 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             _query_new[5::7] = self.to_q_yz_lora_tex(hidden_states[5::7])
             # lora for input plane
             _query_new[6::7] = self.to_q_inp_lora(hidden_states[6::7])
+            query = query + scale * _query_new
+        elif self.lora_type in ["hexa_v1",]:
+            query = attn.to_q(hidden_states)
+            _query_new = torch.zeros_like(query)
+            # lora for xy plane geometry
+            _query_new[0::6] = self.to_q_xy_lora_geo(hidden_states[0::6])
+            # lora for xy plane texture
+            _query_new[3::6] = self.to_q_xy_lora_tex(hidden_states[3::6])
+            # lora for xz plane geometry
+            _query_new[1::6] = self.to_q_xz_lora_geo(hidden_states[1::6])
+            # lora for xz plane texture
+            _query_new[4::6] = self.to_q_xz_lora_tex(hidden_states[4::6])
+            # lora for yz plane geometry
+            _query_new[2::6] = self.to_q_yz_lora_geo(hidden_states[2::6])
+            # lora for yz plane texture
+            _query_new[5::6] = self.to_q_yz_lora_tex(hidden_states[5::6])
             query = query + scale * _query_new
 
         elif self.lora_type == "vanilla":
@@ -598,6 +682,38 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             # lora for input plane
             _value_new[6::7] = self.to_v_inp_lora(encoder_hidden_states[6::7])
             value = value + scale * _value_new
+        elif self.lora_type in ["hexa_v1",]:
+            key = attn.to_k(encoder_hidden_states)
+            _key_new = torch.zeros_like(key)
+            # lora for xy plane geometry
+            _key_new[0::6] = self.to_k_xy_lora_geo(encoder_hidden_states[0::6])
+            # lora for xy plane texture
+            _key_new[3::6] = self.to_k_xy_lora_tex(encoder_hidden_states[3::6])
+            # lora for xz plane geometry
+            _key_new[1::6] = self.to_k_xz_lora_geo(encoder_hidden_states[1::6])
+            # lora for xz plane texture
+            _key_new[4::6] = self.to_k_xz_lora_tex(encoder_hidden_states[4::6])
+            # lora for yz plane geometry
+            _key_new[2::6] = self.to_k_yz_lora_geo(encoder_hidden_states[2::6])
+            # lora for yz plane texture
+            _key_new[5::6] = self.to_k_yz_lora_tex(encoder_hidden_states[5::6])
+            key = key + scale * _key_new
+
+            value = attn.to_v(encoder_hidden_states)
+            _value_new = torch.zeros_like(value)
+            # lora for xy plane geometry
+            _value_new[0::6] = self.to_v_xy_lora_geo(encoder_hidden_states[0::6])
+            # lora for xy plane texture
+            _value_new[3::6] = self.to_v_xy_lora_tex(encoder_hidden_states[3::6])
+            # lora for xz plane geometry
+            _value_new[1::6] = self.to_v_xz_lora_geo(encoder_hidden_states[1::6])
+            # lora for xz plane texture
+            _value_new[4::6] = self.to_v_xz_lora_tex(encoder_hidden_states[4::6])
+            # lora for yz plane geometry
+            _value_new[2::6] = self.to_v_yz_lora_geo(encoder_hidden_states[2::6])
+            # lora for yz plane texture
+            _value_new[5::6] = self.to_v_yz_lora_tex(encoder_hidden_states[5::6])
+            value = value + scale * _value_new
 
         elif self.lora_type in ["vanilla",]:
             key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(encoder_hidden_states)
@@ -636,6 +752,22 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             _hidden_states_new[5::7] = self.to_out_yz_lora_tex(hidden_states[5::7])
             # lora for input plane
             _hidden_states_new[6::7] = self.to_out_inp_lora(hidden_states[6::7])
+            hidden_states = hidden_states + scale * _hidden_states_new
+        elif self.lora_type in ["hexa_v1", ]:
+            hidden_states = attn.to_out[0](hidden_states)
+            _hidden_states_new = torch.zeros_like(hidden_states)
+            # lora for xy plane geometry
+            _hidden_states_new[0::6] = self.to_out_xy_lora_geo(hidden_states[0::6])
+            # lora for xy plane texture
+            _hidden_states_new[3::6] = self.to_out_xy_lora_tex(hidden_states[3::6])
+            # lora for xz plane geometry
+            _hidden_states_new[1::6] = self.to_out_xz_lora_geo(hidden_states[1::6])
+            # lora for xz plane texture
+            _hidden_states_new[4::6] = self.to_out_xz_lora_tex(hidden_states[4::6])
+            # lora for yz plane geometry
+            _hidden_states_new[2::6] = self.to_out_yz_lora_geo(hidden_states[2::6])
+            # lora for yz plane texture
+            _hidden_states_new[5::6] = self.to_out_yz_lora_tex(hidden_states[5::6])
             hidden_states = hidden_states + scale * _hidden_states_new
         elif self.lora_type in ["vanilla",]:
             hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(hidden_states)
@@ -931,53 +1063,6 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
                     lora_type = cross_lora_type
                 )
         return lora_attn_procs
-
-    # # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_unclip.StableUnCLIPPipeline.noise_image_embeddings
-    # def noise_image_embeddings(
-    #     self,
-    #     image_embeds: torch.Tensor,
-    #     noise_level: int,
-    #     noise: Optional[torch.FloatTensor] = None,
-    #     generator: Optional[torch.Generator] = None,
-    # ):
-    #     """
-    #     Add noise to the image embeddings. The amount of noise is controlled by a `noise_level` input. A higher
-    #     `noise_level` increases the variance in the final un-noised images.
-
-    #     The noise is applied in two ways:
-    #     1. A noise schedule is applied directly to the embeddings.
-    #     2. A vector of sinusoidal time embeddings are appended to the output.
-
-    #     In both cases, the amount of noise is controlled by the same `noise_level`.
-
-    #     The embeddings are normalized before the noise is applied and un-normalized after the noise is applied.
-    #     """
-    #     if noise is None:
-    #         noise = randn_tensor(
-    #             image_embeds.shape, generator=generator, device=image_embeds.device, dtype=image_embeds.dtype
-    #         )
-
-    #     noise_level = torch.tensor([noise_level] * image_embeds.shape[0], device=image_embeds.device)
-
-    #     self.image_normalizer.to(image_embeds.device)
-    #     image_embeds = self.image_normalizer.scale(image_embeds)
-
-    #     image_embeds = self.image_noising_scheduler.add_noise(image_embeds, timesteps=noise_level, noise=noise)
-
-    #     image_embeds = self.image_normalizer.unscale(image_embeds)
-
-    #     noise_level = get_timestep_embedding(
-    #         timesteps=noise_level, embedding_dim=image_embeds.shape[-1], flip_sin_to_cos=True, downscale_freq_shift=0
-    #     )
-
-    #     # `get_timestep_embeddings` does not contain any weights and will always return f32 tensors,
-    #     # but we might actually be running in fp16. so we need to cast here.
-    #     # there might be better ways to encapsulate this.
-    #     noise_level = noise_level.to(image_embeds.dtype)
-
-    #     image_embeds = torch.cat((image_embeds, noise_level), 1)
-
-    #     return image_embeds
     
     def forward(
         self,
