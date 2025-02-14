@@ -461,8 +461,30 @@ class MultiimageDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             self._save_image_grid(batch, batch_idx, out, phase="val", render="1st")
             self._save_image_grid(batch, batch_idx, out_2nd, phase="val", render="2nd")
                 
-        if self.cfg.visualize_samples:
-            raise NotImplementedError
+        if self.cfg.visualize_samples and hasattr(self.guidance, "sample"):
+            if "prompt_utils" not in batch:
+                batch["prompt_utils"] = batch["guidance_utils"]
+            
+            image_list = self.guidance.sample(
+                **batch,
+                seed=self.global_step
+            )
+
+            # save the image with the same name as the image_path
+            phase = "val"
+            if "name" in batch:
+                name = batch['name'][0].replace(',', '').replace('.', '').replace(' ', '_')
+            else:
+                name = batch['image_path'][0].replace(',', '').replace('.', '').replace(' ', '_')
+            # specify the image name
+            image_name  = f"it{self.true_global_step}-{phase}-sample/{name}.png"
+
+
+            self.save_image_grid(
+                image_name,
+                image_list,
+                step=self.true_global_step,
+            )
 
     def test_step(self, batch, batch_idx, return_space_cache = False, render_images = True):
 
