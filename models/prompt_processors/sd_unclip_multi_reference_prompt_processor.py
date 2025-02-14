@@ -25,6 +25,12 @@ import os
 
 from functools import partial
 
+def add_margin(pil_img, color=0, size=256):
+    width, height = pil_img.size
+    result = Image.new(pil_img.mode, (size, size), color)
+    result.paste(pil_img, ((size - width) // 2, (size - height) // 2))
+    return result
+
 # create custom image loader
 class ImageLoader:
     def __init__(self, image_paths, image_root_dir, transform):
@@ -59,6 +65,7 @@ class StableUnclipCallableProcessor(MultiRefProcessor):
 
         default_prompt: str = ""
         image_size: Tuple[int, int] = (512, 512)
+        crop_size: Optional[int] = None # if None, no cropping is done
 
     cfg: Config
 
@@ -94,21 +101,53 @@ class StableUnclipCallableProcessor(MultiRefProcessor):
     def load_image(
         image_path,
         image_size: Tuple[int, int] = (512, 512),
+        crop_size: Optional[int] = -1,
+        bg_color: int = 1,
     ):
-        rgba = cv2.cvtColor(
-            cv2.imread(image_path, cv2.IMREAD_UNCHANGED), cv2.COLOR_BGRA2RGBA
-        )
+        image_input = Image.open(image_path)
+        if len(image_size) == 2:
+            assert image_size[0] == image_size[1]
+            image_size = image_size[0]
 
-        rgba = (
-            cv2.resize(rgba, image_size, interpolation=cv2.INTER_AREA).astype(
-                np.float32
-            )
-            / 255.0
-        )
-        rgb = rgba[..., :3] * rgba[..., 3:] + (1 - rgba[..., 3:])
-        # convert to PIL image
-        image = Image.fromarray((rgb * 255).astype(np.uint8))
-        return image
+        if crop_size is not None:
+            if crop_size != -1:
+                alpha_np = np.asarray(image_input)[:, :, 3]
+                coords = np.stack(np.nonzero(alpha_np), 1)[:, (1, 0)]
+                min_x, min_y = np.min(coords, 0)
+                max_x, max_y = np.max(coords, 0)
+                ref_img_ = image_input.crop((min_x, min_y, max_x, max_y))
+                h, w = ref_img_.height, ref_img_.width
+                scale = crop_size / max(h, w)
+                h_, w_ = int(scale * h), int(scale * w)
+                ref_img_ = ref_img_.resize((w_, h_))
+                image_input = add_margin(ref_img_, size=image_size)
+            else:
+                image_input = add_margin(image_input, size=max(image_input.height, image_input.width))
+                image_input = image_input.resize((image_size, image_size))
+
+        # img = scale_and_place_object(img, self.scale_ratio)
+        img = np.array(image_input)
+        img = img.astype(np.float32) / 255. # [0, 1]
+        assert img.shape[-1] == 4 # RGBA
+
+        alpha = img[...,3:4]
+        img = img[...,:3] * alpha + bg_color * (1 - alpha)
+        img = Image.fromarray((img * 255).astype(np.uint8))
+
+        # rgba = cv2.cvtColor(
+        #     cv2.imread(image_path, cv2.IMREAD_UNCHANGED), cv2.COLOR_BGRA2RGBA
+        # )
+
+        # rgba = (
+        #     cv2.resize(rgba, image_size, interpolation=cv2.INTER_AREA).astype(
+        #         np.float32
+        #     )
+        #     / 255.0
+        # )
+        # rgb = rgba[..., :3] * rgba[..., 3:] + (1 - rgba[..., 3:])
+        # # convert to PIL image
+        # image = Image.fromarray((rgb * 255).astype(np.uint8))
+        return img
 
     def func_image(
         self,
@@ -133,7 +172,8 @@ class StableUnclipCallableProcessor(MultiRefProcessor):
                     self.cfg.image_root_dir,
                     image_path
                 ),
-                image_size=self.cfg.image_size
+                image_size=self.cfg.image_size,
+                crop_size=self.cfg.crop_size
             )
 
             ## encode the images ############################
@@ -225,7 +265,8 @@ class StableUnclipCallableProcessor(MultiRefProcessor):
             self.cfg.image_root_dir,
             partial(
                 self.load_image, 
-                image_size=self.cfg.image_size
+                image_size=self.cfg.image_size,
+                crop_size=self.cfg.crop_size
             )
         )
         dataloader = torch.utils.data.DataLoader(
