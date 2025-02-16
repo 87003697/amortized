@@ -7,8 +7,9 @@ from diffusers import (
     DDPMScheduler,
 )
 
-from torchvision.transforms import functional as F
 
+from torchvision.transforms import functional as F
+from tqdm import tqdm
 
 import threestudio
 from threestudio.models.prompt_processors.base import PromptProcessorOutput
@@ -26,6 +27,7 @@ from extern.era3D.pipeline.pipeline_mvdiffusion_unclip import StableUnCLIPImg2Im
 
 from torch.autograd import Variable, grad as torch_grad
 from threestudio.utils.ops import SpecifyGradient
+
 
 
 
@@ -99,15 +101,14 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
             self.era3d_vae.enable_gradient_checkpointing()
         self.era3d_unet.enable_xformers_memory_efficient_attention()
 
-        self.era3d_shceduler = DDPMScheduler.from_pretrained(
+        self.era3d_scheduler = DDPMScheduler.from_pretrained(
                 self.cfg.era3d_model_name_or_path,
                 subfolder="scheduler",
                 torch_dtype=self.weight_dtype,
             )
-
-        self.alphas = self.era3d_shceduler.alphas_cumprod.to(self.device)
         self.grad_clip_val: Optional[float] = None
         self.num_train_timesteps = 1000
+        # self.era3d_scheduler.set_timesteps(1000)
 
         assert self.cfg.n_view in [4, 6], "n_view must be 4 or 6"      
 
@@ -277,7 +278,7 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
         )
 
         # prepare noisy latents ################################################################################################
-        latents_noisy = self.era3d_shceduler.add_noise(
+        latents_noisy = self.era3d_scheduler.add_noise(
             era3d_latents,
             era3d_noise,
             t,
@@ -289,7 +290,7 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
         )
 
         if use_t_plus:
-            latents_noisy_second = self.era3d_shceduler.add_noise(
+            latents_noisy_second = self.era3d_scheduler.add_noise(
                 era3d_latents,
                 era3d_noise,
                 t_plus,
@@ -396,7 +397,7 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
         noise_pred = self.era3d_unet(
             latent_model_input.to(self.weight_dtype),
             t_expanded,
-            encoder_hidden_states=text_embeddings, # already in the weight_dtype
+            encoder_hidden_states=text_embeddings.to(self.weight_dtype), # already in the weight_dtype
             class_labels=image_embeddings.to(self.weight_dtype),
             return_dict=False,
         )[0].to(era3d_latents.dtype)
@@ -562,6 +563,7 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
                 color_noise_pred_cond - color_noise_pred_uncond
             )
 
+        # should be outside of the torch.no_grad()
         normal_era3d_latents, color_era3d_latents = torch.chunk(
             era3d_latents,
             2,
@@ -570,27 +572,34 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
             
         if self.cfg.era3d_weighting_strategy == "dmd":
             with torch.no_grad():
-                t, _ = torch.chunk( # the timestep for the normal and color are the same
-                    t,
-                    2,
+                
+                # the gradient of the normal
+                normal_latents_first = torch.cat( # since the code constrain in the step function, we need to call it one by one, luckily it doesn't cost lots of time
+                    [
+                        self.era3d_scheduler.step(
+                            _noise_pred[None, ...],
+                            _t, 
+                            _latents[None, ...],
+                        ).pred_original_sample
+                        for _noise_pred, _t, _latents in zip(
+                            normal_noise_pred_1st, t.cpu(), normal_era3d_latents
+                        )
+                    ],
                     dim=0,
                 )
-                alpha = (
-                    self.alphas[t] ** 0.5
-                ).view(-1, 1, 1, 1)
-                sigma = (
-                    (
-                        1 - self.alphas[t]
-                    ) ** 0.5
-                ).view(-1, 1, 1, 1)
-
-                # the gradient of the normal
-                normal_latents_first = (
-                    normal_era3d_latents - sigma * normal_noise_pred_1st
-                ) / alpha
-                normal_latents_second = (
-                    normal_era3d_latents - sigma * normal_noise_pred_2nd
-                ) / alpha
+                normal_latents_second = torch.cat( # since the code constrain in the step function, we need to call it one by one, luckily it doesn't cost lots of time
+                    [
+                        self.era3d_scheduler.step(
+                            _noise_pred[None, ...], 
+                            _t, 
+                            _latents[None, ...],
+                        ).pred_original_sample
+                        for _noise_pred, _t, _latents in zip(
+                            normal_noise_pred_2nd, t.cpu(), normal_era3d_latents
+                        )
+                    ],
+                    dim=0,
+                )
                 w = torch.abs(
                     normal_era3d_latents - normal_latents_first
                 ).mean(
@@ -600,12 +609,32 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
                 normal_grad = (normal_latents_second - normal_latents_first) / (w + self.cfg.eps)
 
                 # the gradient of the color
-                color_latents_first = (
-                    color_era3d_latents - sigma * color_noise_pred_1st
-                ) / alpha
-                color_latents_second = (
-                    color_era3d_latents - sigma * color_noise_pred_2nd
-                ) / alpha
+                color_latents_first = torch.cat( # since the code constrain in the step function, we need to call it one by one, luckily it doesn't cost lots of time
+                    [
+                        self.era3d_scheduler.step(
+                            _noise_pred[None, ...],
+                            _t, 
+                            _latents[None, ...],
+                        ).pred_original_sample
+                        for _noise_pred, _t, _latents in zip(
+                            color_noise_pred_1st, t.cpu(), color_era3d_latents
+                        )
+                    ],
+                    dim=0,
+                )
+                color_latents_second = torch.cat( # since the code constrain in the step function, we need to call it one by one, luckily it doesn't cost lots of time
+                    [
+                        self.era3d_scheduler.step(
+                            _noise_pred[None, ...],
+                            _t, 
+                            _latents[None, ...],
+                        ).pred_original_sample
+                        for _noise_pred, _t, _latents in zip(
+                            color_noise_pred_2nd, t.cpu(), color_era3d_latents
+                        )
+                    ],
+                    dim=0,
+                )
                 w = torch.abs(
                     color_era3d_latents - color_latents_first
                 ).mean(
@@ -772,6 +801,155 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
                 **kwargs,
             )
 
+    def sample(
+        self,
+        prompt_utils: PromptProcessorOutput,
+        azimuth: Float[Tensor, "B"],
+        **kwargs,
+    ):
+
+        # prepare scheduler
+        if not hasattr(self, "sample_scheduler"):
+            print("Loading Era3D Sampling Scheduler ...")
+
+            from copy import deepcopy
+            self.sample_scheduler = deepcopy(self.era3d_scheduler)
+            self.sample_scheduler.set_timesteps(20)
+
+        # prepare latent
+        shape = (12, 4, 64, 64)
+        latents_orig = torch.randn(shape, device=self.device)
+
+        # prepare other inputs
+        do_classifier_free_guidance = self.cfg.era3d_guidance_scale > 0
+        condict = prompt_utils.get_image_encodings()
+        image_latents: Float[Tensor, "1 C H W"] = condict["image_latents"]
+        image_latents = image_latents.repeat(12, 1, 1, 1)
+
+        image_embeds: Float[Tensor, "1 C"] = condict["image_embeddings_global"]
+        image_embeds = image_embeds.repeat(12, 1)
+
+        text_embeddings = torch.cat(
+            [
+                self.normal_text_embeds,
+            ] * 2 + \
+            [
+                self.color_text_embeds,
+            ] * 2,
+            dim=0,
+        )
+
+        # perform sampling
+        with torch.no_grad():
+            for _, t in enumerate(tqdm(self.sample_scheduler.timesteps, desc="Sampling")):
+
+                # add noise
+                latents = self.sample_scheduler.add_noise(latents_orig, torch.randn_like(latents_orig), t)
+
+                if do_classifier_free_guidance:
+                    normal_latents, color_latents = torch.chunk(latents, 2, dim=0)  
+                    noisy_latents = torch.cat([normal_latents, normal_latents, color_latents, color_latents], 0)
+
+                    normal_image_latents, color_image_latents = torch.chunk(image_latents, 2, dim=0)
+                    image_latents_input = torch.cat(
+                            [
+                                normal_image_latents,  
+                                torch.zeros_like(normal_image_latents), 
+                                color_image_latents, 
+                                torch.zeros_like(color_image_latents), \
+                            ], 
+                            0
+                        )
+
+                    normal_image_embeds, color_image_embeds = torch.chunk(image_embeds, 2, dim=0)
+                    negative_image_embeds = torch.zeros_like(normal_image_embeds)
+                    image_embeds_input = torch.cat(
+                            [
+                                normal_image_embeds, 
+                                negative_image_embeds, 
+                                color_image_embeds,
+                                negative_image_embeds, 
+                            ], 
+                            0
+                        )                    
+
+                else:
+                    noisy_latents = latents
+                    image_latents_input = image_latents
+                    image_embeds_input = image_embeds
+
+                latent_model_input = torch.cat([
+                        noisy_latents, image_latents_input
+                    ], dim=1)
+                latent_model_input = self.sample_scheduler.scale_model_input(latent_model_input, t)
+
+                # predict the noise residual
+                noise_pred = self.era3d_unet(
+                    latent_model_input.to(self.weight_dtype),
+                    t,
+                    encoder_hidden_states=text_embeddings.to(self.weight_dtype), # already in the weight_dtype
+                    class_labels=image_embeds_input.to(self.weight_dtype),
+                    return_dict=False,
+                )[0].to(latents.dtype)
+
+                # perform the guidance 
+                if do_classifier_free_guidance:
+                    normal_noise_pred_text, normal_noise_pred_uncond, color_noise_pred_text, color_noise_pred_uncond  = torch.chunk(noise_pred, 4, dim=0)
+                    
+                    noise_pred_uncond = torch.cat([normal_noise_pred_uncond, color_noise_pred_uncond], 0)
+                    noise_pred_text = torch.cat([normal_noise_pred_text, color_noise_pred_text], 0)
+                    noise_pred = noise_pred_uncond + self.cfg.era3d_guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+                # update the latents
+                latents_orig = self.sample_scheduler.step(noise_pred, t, latents).pred_original_sample
+
+            # decode the latents to images
+            images = self.era3d_vae.decode(
+                latents_orig.to(self.weight_dtype) / self.era3d_vae.config.scaling_factor, 
+                return_dict=False
+            )[0]
+            # is_nan = torch.isnan(images).any().item()
+            # print(f"t={t}, is_nan={is_nan}")
+            images = (images / 2.0 + 0.5).clamp(0.0, 1.0)
+
+            # also decode input image for comparison
+            input_images = self.era3d_vae.decode(
+                image_latents.to(self.weight_dtype) / self.era3d_vae.config.scaling_factor,
+                return_dict=False
+            )[0]
+            input_images = (input_images / 2.0 + 0.5).clamp(0.0, 1.0)
+
+        normal_images, color_images = torch.chunk(images, 2, dim=0)
+        return_list = ()
+        for normal, color, cond in zip(
+            torch.unbind(normal_images, dim=0), 
+            torch.unbind(color_images, dim=0),
+            torch.unbind(input_images, dim=0),
+            ):
+            return_list += (
+                [
+                    {
+                        "type": "rgb",
+                        "img": color,
+                        "kwargs": {"data_format": "CHW"}
+                    },
+                    {
+                        "type": "rgb",
+                        "img": normal,
+                        "kwargs": {"data_format": "CHW"}
+                    },
+                    {
+                        "type": "rgb",
+                        "img": cond,
+                        "kwargs": {"data_format": "CHW"}
+                    }
+                ],
+            )
+
+
+            
+        
+        return return_list
 
 
     def __call__(
