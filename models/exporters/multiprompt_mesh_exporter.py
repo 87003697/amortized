@@ -21,7 +21,7 @@ class MultipromptMeshExporter(Exporter):
         fmt: str = "obj-mtl"  # in ['obj-mtl', 'obj'], TODO: fbx
         save_name: str = "model"
         save_normal: bool = False
-        save_uv: bool = True
+        save_uv: bool = False
         save_texture: bool = True
         texture_size: int = 1024
         texture_format: str = "jpg"
