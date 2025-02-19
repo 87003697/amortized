@@ -1041,9 +1041,6 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
             
 
 
-            
-
-
         # return the loss and grad
         if not is_dual:
             return {
