@@ -1038,6 +1038,7 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
         #     normal = (normal * 255).clamp(0, 255).detach().cpu().numpy().astype(np.uint8)
         #     Image.fromarray(rgb).save(f"debug/rgb_{i}.png")
         #     Image.fromarray(normal).save(f"debug/normal_{i}.png")
+            
 
 
             
