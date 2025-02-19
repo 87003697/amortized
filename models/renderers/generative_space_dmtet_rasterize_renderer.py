@@ -267,6 +267,12 @@ class GenerativeSpaceDmtetRasterizeRenderer(NVDiffRasterizer):
                 rotate_front: Float[Tensor, "B 3 3"] = w2c_front[:, :3, :3]
                 gb_normal_cam = gb_normal[..., None, :] @ rotate_front.permute(0, 2, 1)[..., None, None, :, :]
 
+                # flip_x = torch.eye(3).to(w2c) # pixel space flip axis so we need built negative y-axis normal
+                # flip_x[0, 0] = -1
+                # # camera_batch_v_nrm = camera_batch_v_nrm @ flip_x[None, ...]
+                # # flip_x: B 3 3 -> B 1 1 3 3
+                # gb_normal_cam = gb_normal_cam @ flip_x[None, None, None, ...]
+                
                 gb_normal_cam = gb_normal_cam.squeeze(-2)
                 gb_normal_cam = F.normalize(gb_normal_cam, dim=-1)
                 gb_normal_cam = (gb_normal_cam + 1.0) / 2.0

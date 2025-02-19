@@ -43,7 +43,8 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
         era3d_model_name_or_path: str='pretrained/Era3D-512-6view'
         era3d_embeddings_dir: str='extern/era3D/data/fixed_prompt_embeds_6view'
 
-        era3d_guidance_scale: float=3.0
+        era3d_guidance_scale_color: float=3.0
+        era3d_guidance_scale_normal: float=3.0
 
         era3d_min_step_percent: Optional[float]=0.02
         era3d_max_step_percent: Optional[float]=0.98
@@ -556,10 +557,10 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
                                                                 t_plus = t_plus,
                                                                 is_dual = is_dual,
                                                             )
-            normal_noise_pred_1st = normal_noise_pred_uncond + self.cfg.era3d_guidance_scale * (
+            normal_noise_pred_1st = normal_noise_pred_uncond + self.cfg.era3d_guidance_scale_normal * (
                 normal_noise_pred_cond - normal_noise_pred_uncond
             )
-            color_noise_pred_1st = color_noise_pred_uncond + self.cfg.era3d_guidance_scale * (
+            color_noise_pred_1st = color_noise_pred_uncond + self.cfg.era3d_guidance_scale_color * (
                 color_noise_pred_cond - color_noise_pred_uncond
             )
 
@@ -821,7 +822,7 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
         latents_orig = torch.randn(shape, device=self.device)
 
         # prepare other inputs
-        do_classifier_free_guidance = self.cfg.era3d_guidance_scale > 0
+        do_classifier_free_guidance = self.cfg.era3d_guidance_scale_color > 0 or self.cfg.era3d_guidance_scale_normal > 0
         condict = prompt_utils.get_image_encodings()
         image_latents: Float[Tensor, "1 C H W"] = condict["image_latents"]
         image_latents = image_latents.repeat(12, 1, 1, 1)
@@ -896,10 +897,10 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
                 if do_classifier_free_guidance:
                     normal_noise_pred_text, normal_noise_pred_uncond, color_noise_pred_text, color_noise_pred_uncond  = torch.chunk(noise_pred, 4, dim=0)
                     
-                    noise_pred_uncond = torch.cat([normal_noise_pred_uncond, color_noise_pred_uncond], 0)
-                    noise_pred_text = torch.cat([normal_noise_pred_text, color_noise_pred_text], 0)
-                    noise_pred = noise_pred_uncond + self.cfg.era3d_guidance_scale * (noise_pred_text - noise_pred_uncond)
-
+                    normal_noise_pred = normal_noise_pred_uncond + self.cfg.era3d_guidance_scale_normal * (normal_noise_pred_text - normal_noise_pred_uncond)
+                    color_noise_pred = color_noise_pred_uncond + self.cfg.era3d_guidance_scale_color * (color_noise_pred_text - color_noise_pred_uncond)
+                    noise_pred = torch.cat([normal_noise_pred, color_noise_pred], 0)
+                    
                 # update the latents
                 latents_orig = self.sample_scheduler.step(noise_pred, t, latents).pred_original_sample
 
@@ -961,7 +962,6 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
         elevation: Float[Tensor, "B"],
         azimuth: Float[Tensor, "B"],
         camera_distances: Float[Tensor, "B"],
-        camera_distances_relative: Float[Tensor, "B"],
         c2w: Float[Tensor, "B 4 4"],
         rgb_as_latents: bool = False,
         fovy=None,
@@ -1023,6 +1023,25 @@ class Era3DAsynchronousScoreDistillationGuidance(BaseObject):
                 0.0 if not is_dual else [0.0, 0.0], 
                 device=self.device
             )
+
+        # from PIL import Image
+        # import numpy as np
+        # import os
+        # os.makedirs("debug", exist_ok=True)
+        # # save the images
+        # for i, (rgb, normal) in enumerate(zip(
+        #     torch.unbind(rgb, dim=0), 
+        #     torch.unbind(normal, dim=0),
+        # )):
+        #     # save the images
+        #     rgb = (rgb * 255).clamp(0, 255).detach().cpu().numpy().astype(np.uint8)
+        #     normal = (normal * 255).clamp(0, 255).detach().cpu().numpy().astype(np.uint8)
+        #     Image.fromarray(rgb).save(f"debug/rgb_{i}.png")
+        #     Image.fromarray(normal).save(f"debug/normal_{i}.png")
+
+
+            
+
 
         # return the loss and grad
         if not is_dual:

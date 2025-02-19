@@ -32,6 +32,8 @@ from threestudio.utils.config import parse_structured
 from PIL import Image
 from functools import partial
 
+from scipy.spatial.transform import Rotation as R
+
 is_ortho = True
 
 
@@ -48,12 +50,63 @@ def get_ortho_ray_directions_origins(
         indexing="xy",
     )
     origins: Float[Tensor, "H W 3"] = torch.stack(
-        [(i - cx) / W * 2, -(j - cy) / H * 2, -torch.ones_like(i)], -1
+        [(i - cx) / W * 2, -(j - cy) / H * 2, torch.ones_like(i)], -1
     )
     directions: Float[Tensor, "H W 3"] = torch.stack(
         [torch.zeros_like(i), torch.zeros_like(i), -torch.ones_like(i)], -1
     )
     return origins, directions
+
+def RT_opengl2opencv(RT):
+     # Build the coordinate transform matrix from world to computer vision camera
+    # R_world2cv = R_bcam2cv@R_world2bcam
+    # T_world2cv = R_bcam2cv@T_world2bcam
+
+    R = RT[:3, :3]
+    t = RT[:3, 3]
+
+    R_bcam2cv = np.asarray([[1, 0, 0], [0, -1, 0], [0, 0, -1]], np.float32)
+
+    R_world2cv = R_bcam2cv @ R
+    t_world2cv = R_bcam2cv @ t
+
+    RT = np.concatenate([R_world2cv,t_world2cv[:,None]],1)
+
+    return RT
+
+FRONT = [
+    [1.000000000000000000e+00, 0.000000000000000000e+00, 0.000000000000000000e+00, 0.000000000000000000e+00],
+    [0.000000000000000000e+00, -1.343588564850506373e-07, 1.000000119209289551e+00, -1.746665105883948854e-07],
+    [0.000000000000000000e+00, -1.000000119209289551e+00, -1.343588564850506373e-07, -1.300000071525573730e+00]
+]
+FRONT_RIGHT = [
+    [7.071067690849304199e-01, 7.071068286895751953e-01, 0.000000000000000000e+00, 1.192092895507812500e-07],
+    [0.000000000000000000e+00, -7.587616579485256807e-08, 1.000000119209289551e+00, -9.863901340168013121e-08],
+    [7.071068286895751953e-01, -7.071068286895751953e-01, -7.587616579485256807e-08, -1.838477730751037598e+00]
+]
+RIGHT = [
+    [-2.220446049250313081e-16, 1.000000000000000000e+00, 0.000000000000000000e+00, 2.886579758146288598e-16],
+    [0.000000000000000000e+00, -2.220446049250313081e-16, 1.000000000000000000e+00, 0.000000000000000000e+00],
+    [1.000000000000000000e+00, 0.000000000000000000e+00, -2.220446049250313081e-16, -1.299999952316284180e+00]
+]
+BACK = [
+    [-1.000000238418579102e+00, 0.000000000000000000e+00, 0.000000000000000000e+00, 0.000000000000000000e+00],
+    [0.000000000000000000e+00, -1.343588564850506373e-07, 1.000000119209289551e+00, 1.746665105883948854e-07],
+    [0.000000000000000000e+00, 1.000000119209289551e+00, -1.343588564850506373e-07, -1.300000071525573730e+00]
+]
+LEFT = [
+    [-2.220446049250313081e-16, -1.000000000000000000e+00, 0.000000000000000000e+00, -2.886579758146288598e-16],
+    [0.000000000000000000e+00, -2.220446049250313081e-16, 1.000000000000000000e+00, 0.000000000000000000e+00],
+    [-1.000000000000000000e+00, 0.000000000000000000e+00, -2.220446049250313081e-16, -1.299999952316284180e+00]
+]
+FRONT_LEFT = [
+    [7.071067690849304199e-01, -7.071068286895751953e-01, 0.000000000000000000e+00, -1.192092895507812500e-07],
+    [0.000000000000000000e+00, -7.587616579485256807e-08, 1.000000119209289551e+00, -9.863901340168013121e-08],
+    [-7.071068286895751953e-01, -7.071068286895751953e-01, -7.587616579485256807e-08, -1.838477730751037598e+00]
+]
+
+
+
 
 @dataclass
 class MultiviewMultipromptDualRendererMultiStepDataModuleConfig:
@@ -291,53 +344,50 @@ class BaseDataset(Dataset, Updateable):
         azimuth: Float[Tensor, "B"] = azimuth_deg * math.pi / 180
         elevation: Float[Tensor, "B"] = elevation_deg * math.pi / 180
 
-        ##############################################################################################################
-        # in MV-Dream, the camera distance is relative and related to the focal length
-        # the following is the default setting, 
-        # however, the relative camera distance is not used in supervised training
-        camera_distances_relative = camera_distances
-
-        # convert spherical coordinates to cartesian coordinates
-        # right hand coordinate system, x back, y right, z up
-        # elevation in (-90, 90), azimuth from +x to +y in (-180, 180)
-        camera_positions: Float[Tensor, "B 3"] = torch.stack(
-            [
-                camera_distances * torch.cos(elevation) * torch.cos(azimuth),
-                camera_distances * torch.cos(elevation) * torch.sin(azimuth),
-                camera_distances * torch.sin(elevation),
-            ],
-            dim=-1,
-        ).to(torch.float32)
-
-        # default scene center at origin
-        center: Float[Tensor, "B 3"] = torch.zeros_like(camera_positions)
-        # default camera up direction as +z
-        up: Float[Tensor, "B 3"] = torch.as_tensor([0, 0, 1], dtype=torch.float32)[
-            None, :
-        ].repeat(batch_size, 1)
-
-        # camera pertubation is not implemented
-
-        # light position is only used in relightable mode, so put it in the function
-        if phase == "train":
-            light_positions = self._random_camera_to_light_position(camera_positions)
-        else:
-            light_positions = camera_positions
-
-        # camera to world matrix
-        lookat: Float[Tensor, "B 3"] = F.normalize(center - camera_positions, dim=-1)
-        right: Float[Tensor, "B 3"] = F.normalize(torch.linalg.cross(lookat, up), dim=-1)
-        up = F.normalize(torch.linalg.cross(right, lookat), dim=-1)
-        c2w3x4: Float[Tensor, "B 3 4"] = torch.cat(
-            [torch.stack([right, up, -lookat], dim=-1), camera_positions[:, :, None]],
-            dim=-1,
-        )
-        c2w: Float[Tensor, "B 4 4"] = torch.cat(
-            [c2w3x4, torch.zeros_like(c2w3x4[:, :1])], dim=1
-        )
-        c2w[:, 3, 3] = 1.0
 
         if is_ortho:
+
+            RT_list = []
+            # c2w_list = []
+            for azi in azimuth_deg:
+                azi2RT = {
+                    0: FRONT,
+                    45: FRONT_RIGHT,
+                    90: RIGHT,
+                    180: BACK,
+                    270: LEFT,
+                    315: FRONT_LEFT,
+                }
+                RT = np.array(azi2RT[int(azi)])
+                RT_list.append(RT)
+                # RT_cv = RT_opengl2opencv(RT)
+                # w2c = np.concatenate([RT_cv, np.array([[0,0,0,1]])], axis=0)
+                # c2w = np.linalg.inv(w2c)
+                # c2w_list.append(torch.tensor(c2w, dtype=torch.float32))
+
+            # c2w: Float[Tensor, "B 4 4"] = torch.stack(c2w_list, dim=0)
+
+            # the w2c for mesh rasterization is different from the c2w.inverse()
+            w2c_list = []
+            for RT in RT_list:
+                # rot = RT[:, [0, 2, 1]]
+                # RT[:3, :3] = rot
+                w2c_list.append(
+                    torch.tensor(
+                        np.concatenate([RT, np.array([[0, 0, 0, 1]])], axis=0),
+                        dtype=torch.float32
+                        )
+                    )
+
+            w2c: Float[Tensor, "B 4 4"] = torch.stack(w2c_list, dim=0)
+            c2w = torch.inverse(w2c)
+
+            camera_positions = c2w[:, :3, 3]
+            if phase == "train":
+                light_positions = self._random_camera_to_light_position(camera_positions)
+            else:
+                light_positions = camera_positions
+
             # no focal length
             directions: Float[Tensor, "H W 3"]
             origins: Float[Tensor, "H W 3"]
@@ -356,16 +406,64 @@ class BaseDataset(Dataset, Updateable):
             )
             _, rays_d_rasterize = get_ortho_rays(origins_rasterize, directions_rasterize, c2w, keepdim=True)
 
-            # TODO: ortho camera does not have mvp matrix
             proj_mtx: Float[Tensor, "B 4 4"] = get_ortho_projection_matrix(
-                -1, 1, -1, 1, 0.1, 1000.0
+                -1., 1., -1., 1., 0.1, 100.0
             )[None, ...].repeat(batch_size, 1, 1)
-            # proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(
-            #     fovy, self.width / self.height, 0.1, 1000.0
-            # )  # FIXME: hard-coded near and far
-            mvp_mtx: Float[Tensor, "B 4 4"] = get_mvp_matrix(c2w, proj_mtx)
+            # mvp_mtx: Float[Tensor, "B 4 4"] = get_mvp_matrix(c2w, proj_mtx)
+
+
+
+            # mvp_mtx: Float[Tensor, "B 4 4"] = get_mvp_matrix(c2w, proj_mtx)
+            mvp_mtx: Float[Tensor, "B 4 4"] = proj_mtx @ w2c
+            # mvp_mtx: Float[Tensor, "B 4 4"] = proj_mtx @ torch.inverse(c2w)
 
         else: # perspective camera
+
+            ##############################################################################################################
+            # in MV-Dream, the camera distance is relative and related to the focal length
+            # the following is the default setting, 
+            # however, the relative camera distance is not used in supervised training
+            camera_distances_relative = camera_distances
+
+            # convert spherical coordinates to cartesian coordinates
+            # right hand coordinate system, x back, y right, z up
+            # elevation in (-90, 90), azimuth from +x to +y in (-180, 180)
+            camera_positions: Float[Tensor, "B 3"] = torch.stack(
+                [
+                    camera_distances * torch.cos(elevation) * torch.cos(azimuth),
+                    camera_distances * torch.cos(elevation) * torch.sin(azimuth),
+                    camera_distances * torch.sin(elevation),
+                ],
+                dim=-1,
+            ).to(torch.float32)
+
+            # default scene center at origin
+            center: Float[Tensor, "B 3"] = torch.zeros_like(camera_positions)
+            # default camera up direction as +z
+            up: Float[Tensor, "B 3"] = torch.as_tensor([0, 0, 1], dtype=torch.float32)[
+                None, :
+            ].repeat(batch_size, 1)
+
+            # camera pertubation is not implemented
+
+            # light position is only used in relightable mode, so put it in the function
+            if phase == "train":
+                light_positions = self._random_camera_to_light_position(camera_positions)
+            else:
+                light_positions = camera_positions
+
+            # camera to world matrix
+            lookat: Float[Tensor, "B 3"] = F.normalize(center - camera_positions, dim=-1)
+            right: Float[Tensor, "B 3"] = F.normalize(torch.linalg.cross(lookat, up), dim=-1)
+            up = F.normalize(torch.linalg.cross(right, lookat), dim=-1)
+            c2w3x4: Float[Tensor, "B 3 4"] = torch.cat(
+                [torch.stack([right, up, -lookat], dim=-1), camera_positions[:, :, None]],
+                dim=-1,
+            )
+            c2w: Float[Tensor, "B 4 4"] = torch.cat(
+                [c2w3x4, torch.zeros_like(c2w3x4[:, :1])], dim=1
+            )
+            c2w[:, 3, 3] = 1.0
 
             fovy = fovy_deg * math.pi / 180
 
@@ -399,12 +497,12 @@ class BaseDataset(Dataset, Updateable):
             "rays_d": rays_d,
             "mvp_mtx": mvp_mtx,
             "camera_positions": camera_positions,
-            "c2w": c2w,
             "light_positions": light_positions,
+            "c2w": c2w,
             "elevation": elevation_deg,
             "azimuth": azimuth_deg,
             "camera_distances": camera_distances,
-            "camera_distances_relative": camera_distances_relative,
+            # "camera_distances_relative": camera_distances_relative,
             "height": self.height,
             "width": self.width,
             "fovy": fovy_deg,
@@ -702,7 +800,7 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Test(BaseDataset)
                 camera_distances=batch.pop("distances").view(-1),
                 fovy_deg=batch.pop("fovys_deg").view(-1),
                 phase="test",
-                is_ortho=is_ortho 
+                is_ortho=False, #is_ortho 
             )
         )
         
@@ -1028,7 +1126,7 @@ class MultiviewMultipromptDualRendererMultiStepDataModule(pl.LightningDataModule
                 self.sup_obj_library = json.load(f)
 
         ##############################################################################################################
-        self.num_workers = 2 # 0 for debugging
+        self.num_workers = 0 # 0 for debugging
         self.pin_memory = False
         self.prefetch_factor = 2 if self.num_workers > 0 else None
 
