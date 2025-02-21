@@ -356,12 +356,6 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 noisy_latent_input = torch.cat([noisy_latent_input] * 2, dim=0)
 
             # necessary coefficients
-            alphas: Float[Tensor, "..."] = self.sample_scheduler.alphas_cumprod.to(
-                self.device
-            )
-            alpha = (alphas[t] ** 0.5).view(-1, 1, 1, 1).to(self.device)
-            sigma = ((1 - alphas[t]) ** 0.5).view(-1, 1, 1, 1).to(self.device)
-
             if self.cfg.predition_type in ["epsilon", "v_prediction"]:
                 # predict the noise added
                 pred = self.geometry.denoise(
@@ -369,29 +363,15 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                     text_embed = text_embed, # TODO: text_embed might be null
                     timestep = t.to(self.device),
                 )
-                latents = self.sample_scheduler.step(pred, t, latents).prev_sample
-            elif self.cfg.predition_type in ["sample", "sample_delta", "sample_delta_v2", "sample_delta_v3"]:
-                output = self.geometry.denoise(
-                    noisy_input = noisy_latent_input,
-                    text_embed = text_embed, # TODO: text_embed might be null
-                    timestep = t.to(self.device),
-                )
-                if self.cfg.predition_type in ["sample"]:
-                    denoised_latents = output
-                elif self.cfg.predition_type in ["sample_delta"]:
-                    denoised_latents = noisy_latent_input + output
-                elif self.cfg.predition_type in ["sample_delta_v2"]:
-                    denoised_latents = noisy_latent_input - output
-                elif self.cfg.predition_type in ["sample_delta_v3"]:
-                    denoised_latents = noisy_latent_input / alpha - output
-
-                latents = self.sample_scheduler.step(denoised_latents, t, latents).prev_sample
+                results = self.sample_scheduler.step(pred, t, latents)
+                latents = results.prev_sample
+                latents_denoised = results.pred_original_sample
             else:
                 raise NotImplementedError
 
         # decode the latent to 3D representation
         space_cache = self.geometry.decode(
-            latents = latents,
+            latents = latents_denoised,
         )
 
         return space_cache
@@ -421,6 +401,9 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
         # zero the gradients
         opt = self.optimizers()
+
+        # load the coefficients to the GPU
+        self.noise_scheduler.alphas_cumprod = self.noise_scheduler.alphas_cumprod.to(self.device)
     
         for i, (t, batch) in enumerate(zip(timesteps, batch_list)):
 
@@ -456,47 +439,55 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             # if torch.rand(1) < 0: 
             #     text_embed = uncond
 
-            # necessary coefficients
-            alphas: Float[Tensor, "..."] = self.noise_scheduler.alphas_cumprod.to(
-                self.device
+            noise_pred = self.geometry.denoise(
+                noisy_input = noisy_latent,
+                text_embed = text_embed, # TODO: text_embed might be null
+                timestep = t.to(self.device),
             )
-            alpha = (alphas[t] ** 0.5).view(-1, 1, 1, 1).to(self.device)
-            sigma = ((1 - alphas[t]) ** 0.5).view(-1, 1, 1, 1).to(self.device)
+
+            denoised_latents = self.noise_scheduler.step(noise_pred, t.to(self.device), noisy_latent).pred_original_sample
+
+            # # necessary coefficients
+            # alphas: Float[Tensor, "..."] = self.noise_scheduler.alphas_cumprod.to(
+            #     self.device
+            # )
+            # alpha = (alphas[t] ** 0.5).view(-1, 1, 1, 1).to(self.device)
+            # sigma = ((1 - alphas[t]) ** 0.5).view(-1, 1, 1, 1).to(self.device)
 
 
-            # predict the noise added
-            if self.cfg.predition_type in ["epsilon"]:
-                noise_pred = self.geometry.denoise(
-                    noisy_input = noisy_latent,
-                    text_embed = text_embed, # TODO: text_embed might be null
-                    timestep = t.to(self.device),
-                )
+            # # predict the noise added
+            # if self.cfg.predition_type in ["epsilon"]:
+            #     noise_pred = self.geometry.denoise(
+            #         noisy_input = noisy_latent,
+            #         text_embed = text_embed, # TODO: text_embed might be null
+            #         timestep = t.to(self.device),
+            #     )
 
-                # convert epsilon into x0
-                denoised_latents = (noisy_latent - sigma * noise_pred) / alpha
-            elif self.cfg.predition_type in ["v_prediction"]:
-                v_pred = self.geometry.denoise(
-                    noisy_input = noisy_latent,
-                    text_embed = text_embed, # TODO: text_embed might be null
-                    timestep = t.to(self.device),
-                )
-                denoised_latents = alpha * noisy_latent - sigma * v_pred
-            elif self.cfg.predition_type in ["sample", "sample_delta", "sample_delta_v2", "sample_delta_v3"]:
-                output = self.geometry.denoise(
-                    noisy_input = noisy_latent,
-                    text_embed = text_embed, # TODO: text_embed might be null
-                    timestep = t.to(self.device),
-                )
-                if self.cfg.predition_type in ["sample"]:
-                    denoised_latents = output
-                elif self.cfg.predition_type in ["sample_delta"]:
-                    denoised_latents = noisy_latent + output
-                elif self.cfg.predition_type in ["sample_delta_v2"]:
-                    denoised_latents = noisy_latent - output
-                elif self.cfg.predition_type in ["sample_delta_v3"]:
-                    denoised_latents = noisy_latent / alpha - output
-            else:
-                raise NotImplementedError
+            #     # convert epsilon into x0
+            #     denoised_latents = (noisy_latent - sigma * noise_pred) / alpha
+            # elif self.cfg.predition_type in ["v_prediction"]:
+            #     v_pred = self.geometry.denoise(
+            #         noisy_input = noisy_latent,
+            #         text_embed = text_embed, # TODO: text_embed might be null
+            #         timestep = t.to(self.device),
+            #     )
+            #     denoised_latents = alpha * noisy_latent - sigma * v_pred
+            # elif self.cfg.predition_type in ["sample", "sample_delta", "sample_delta_v2", "sample_delta_v3"]:
+            #     output = self.geometry.denoise(
+            #         noisy_input = noisy_latent,
+            #         text_embed = text_embed, # TODO: text_embed might be null
+            #         timestep = t.to(self.device),
+            #     )
+            #     if self.cfg.predition_type in ["sample"]:
+            #         denoised_latents = output
+            #     elif self.cfg.predition_type in ["sample_delta"]:
+            #         denoised_latents = noisy_latent + output
+            #     elif self.cfg.predition_type in ["sample_delta_v2"]:
+            #         denoised_latents = noisy_latent - output
+            #     elif self.cfg.predition_type in ["sample_delta_v3"]:
+            #         denoised_latents = noisy_latent / alpha - output
+            # else:
+            #     raise NotImplementedError
 
             # decode the latent to 3D representation
             batch["space_cache"] = self.geometry.decode(
@@ -512,29 +503,29 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             regularization_loss = loss_dict["regularization_loss"]
 
             if hasattr(self.cfg.loss, "weighting_strategy"):
-                if self.cfg.loss.weighting_strategy in ["v1"]:
-                    weight_fide = 1.0 / self.cfg.num_parts_training
-                    weight_regu = 1.0 / self.cfg.num_parts_training
-                elif self.cfg.loss.weighting_strategy in ["v2"]:
-                    weight_fide = (alpha / sigma).mean() # mean is for converting the batch to a scalar
-                    weight_regu = (alpha / sigma).mean() 
-                elif self.cfg.loss.weighting_strategy in ["v2-2"]:
-                    weight_fide = 1.0 / self.cfg.num_parts_training
-                    weight_regu = (alpha / sigma).mean()
-                elif self.cfg.loss.weighting_strategy in ["v3"]:
-                    # follow SDS
-                    weight_fide = (sigma**2).mean()
-                    weight_regu = (sigma**2).mean() 
-                elif self.cfg.loss.weighting_strategy in ["v3-2"]:
-                    weight_fide = 1.0 / self.cfg.num_parts_training
-                    # follow SDS
-                    weight_regu = (sigma**2).mean()
-                elif self.cfg.loss.weighting_strategy in ["v4"]:
-                    weight_fide = (sigma / alpha).mean()
-                    weight_regu = (sigma / alpha).mean()
-                else:
-                    raise NotImplementedError
-            else:
+            #     if self.cfg.loss.weighting_strategy in ["v1"]:
+            #         weight_fide = 1.0 / self.cfg.num_parts_training
+            #         weight_regu = 1.0 / self.cfg.num_parts_training
+            #     elif self.cfg.loss.weighting_strategy in ["v2"]:
+            #         weight_fide = (alpha / sigma).mean() # mean is for converting the batch to a scalar
+            #         weight_regu = (alpha / sigma).mean() 
+            #     elif self.cfg.loss.weighting_strategy in ["v2-2"]:
+            #         weight_fide = 1.0 / self.cfg.num_parts_training
+            #         weight_regu = (alpha / sigma).mean()
+            #     elif self.cfg.loss.weighting_strategy in ["v3"]:
+            #         # follow SDS
+            #         weight_fide = (sigma**2).mean()
+            #         weight_regu = (sigma**2).mean() 
+            #     elif self.cfg.loss.weighting_strategy in ["v3-2"]:
+            #         weight_fide = 1.0 / self.cfg.num_parts_training
+            #         # follow SDS
+            #         weight_regu = (sigma**2).mean()
+            #     elif self.cfg.loss.weighting_strategy in ["v4"]:
+            #         weight_fide = (sigma / alpha).mean()
+            #         weight_regu = (sigma / alpha).mean()
+            #     else:
+            #         raise NotImplementedError
+            # else:
                 weight_fide = 1.0 / self.cfg.num_parts_training
                 weight_regu = 1.0 / self.cfg.num_parts_training
 
