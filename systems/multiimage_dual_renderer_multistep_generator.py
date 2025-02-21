@@ -106,7 +106,6 @@ class MultiimageDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
         # Sampler for training
         self.noise_scheduler = self._configure_scheduler(self.cfg.noise_scheduler)
-        self.is_training_odd = True if self.cfg.noise_scheduler == "ddpm" else False
 
         # Sampler for inference
         self.sample_scheduler = self._configure_scheduler(self.cfg.sample_scheduler)
@@ -328,23 +327,20 @@ class MultiimageDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 t
             )
 
-            # necessary coefficients
-            alphas: Float[Tensor, "..."] = self.sample_scheduler.alphas_cumprod.to(
-                self.device
-            )
-
             # predict the noise added
             pred = self.geometry.denoise(
                 noisy_input = noisy_latent_input,
                 timestep = t.to(self.device),
                 **cond_dict,
             )
+
+            latents_denoised = self.sample_scheduler.step(pred, t, latents).pred_original_sample
             latents = self.sample_scheduler.step(pred, t, latents).prev_sample
 
 
         # decode the latent to 3D representation
         space_cache = self.geometry.decode(
-            latents = latents,
+            latents = latents_denoised,
         )
 
         return space_cache
@@ -374,6 +370,9 @@ class MultiimageDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
         # zero the gradients
         opt = self.optimizers()
+
+        # load the coefficients to the GPU
+        self.noise_scheduler.alphas_cumprod = self.noise_scheduler.alphas_cumprod.to(self.device)
     
         for i, (t, batch) in enumerate(zip(timesteps, batch_list)):
 
@@ -396,12 +395,10 @@ class MultiimageDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 t,
             )
 
-            # necessary coefficients
-            alphas: Float[Tensor, "..."] = self.noise_scheduler.alphas_cumprod.to(
-                self.device
+            noisy_latent = self.noise_scheduler.scale_model_input(
+                noisy_latent,
+                t
             )
-            alpha = (alphas[t] ** 0.5).view(-1, 1, 1, 1).to(self.device)
-            sigma = ((1 - alphas[t]) ** 0.5).view(-1, 1, 1, 1).to(self.device)
 
             # predict the noise added
             noise_pred = self.geometry.denoise(
@@ -410,8 +407,17 @@ class MultiimageDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 **cond_dict
             )
 
-            # convert epsilon into x0
-            denoised_latents = (noisy_latent - sigma * noise_pred) / alpha
+            #convert epsilon into x0
+            denoised_latents = self.noise_scheduler.step(
+                noise_pred, 
+                t.to(self.device),
+                noisy_latent).pred_original_sample
+            # denoised_latents = torch.stack([
+            #     self.noise_scheduler.step(_pred, t, _latent).pred_original_sample
+            #     for _pred, t, _latent in zip(noise_pred, noisy_latent)
+            # ])
+            
+            #self.noise_scheduler.step(noise_pred, t, latent).pred_original_sample
 
             # decode the latent to 3D representation
             batch["space_cache"] = self.geometry.decode(
@@ -870,7 +876,7 @@ class MultiimageDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         if "name" in batch:
             name = batch['name'][0].replace(',', '').replace('.', '').replace(' ', '_')
         else:
-            name = batch['prompt'][0].replace(',', '').replace('.', '').replace(' ', '_')
+            name = batch['image_path'][0].replace(',', '').replace('.', '').replace(' ', '_')
 
         for out in exporter_output:
             save_func_name = f"save_{out.save_type}"
