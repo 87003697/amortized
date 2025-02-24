@@ -170,6 +170,18 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             else:
                 self.geometry.initialize_shape()
 
+    # def on_test_epoch_start(self) -> None:
+    #     # save state_dict
+    #     state_dict = self.geometry.state_dict() # <class 'collections.OrderedDict'>
+    #     save_state_dict = {}
+    #     for key, value in state_dict.items():
+    #         if "space_generator" in key:
+    #             if "weight" in key:
+    #                 save_state_dict[key] = value
+    #     # only save the weights of the geometry
+    #     torch.save(save_state_dict, "pretrained/triplane_turbo_sd_v1.pth")
+    #     super().on_test_epoch_start()
+
     def on_train_epoch_start(self) -> None:
         super().on_train_epoch_start()
 
