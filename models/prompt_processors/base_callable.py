@@ -407,6 +407,7 @@ class MultiRefProcessor(BaseObject):
 
             return MultiRefProcessorOutput4Text(
                 device=self.device,
+                prompts=prompts,
                 **prompt_args,
             )
 
@@ -427,6 +428,8 @@ class MultiRefProcessorOutput4Text:
             "text_embeddings_local",
         ]
     )
+
+    prompts: Optional[List[str]] = None
 
     def get_uncond_text_embeddings(self):
         # only the local embeddings are uncond
