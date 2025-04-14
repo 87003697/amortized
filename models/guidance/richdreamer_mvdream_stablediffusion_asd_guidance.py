@@ -599,7 +599,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 is_dual=is_dual,
             )
 
-        noise_pred_first = noise_pred_uncond + self.cfg.mv_guidance_scale * (
+        noise_pred_first = noise_pred_uncond + self.mv_guidance_scale * (
             noise_pred_text - noise_pred_uncond
         )
         noise_pred_second = noise_pred_text_second
@@ -633,7 +633,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                     w = w.view(img_batch_size // self.cfg.n_view, self.cfg.n_view).mean(dim=-1, keepdim=True).repeat_interleave(self.cfg.n_view, dim=0)
                     w = w.view(-1, 1, 1, 1)
                 elif self.cfg.mv_weighting_strategy == "dmd+1":
-                    _noise_pred_second =  noise_pred_uncond + self.cfg.mv_guidance_scale * (
+                    _noise_pred_second =  noise_pred_uncond + self.mv_guidance_scale * (
                         noise_pred_text_second - noise_pred_uncond
                     )
                     _alpha = (self.alphas[t_plus] ** 0.5).view(-1, 1, 1, 1)
@@ -641,7 +641,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                     _latent_second = (mv_latents - _sigma * _noise_pred_second) / _alpha
                     w = torch.abs(mv_latents - _latent_second).mean(dim=(1, 2, 3), keepdim=True)
                 elif self.cfg.mv_weighting_strategy == "dmd_mv+1":
-                    _noise_pred_second =  noise_pred_uncond + self.cfg.mv_guidance_scale * (
+                    _noise_pred_second =  noise_pred_uncond + self.mv_guidance_scale * (
                         noise_pred_text_second - noise_pred_uncond
                     )
                     _alpha = (self.alphas[t_plus] ** 0.5).view(-1, 1, 1, 1)
@@ -1792,3 +1792,4 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
             if self.cfg.mv_min_step_percent is not None else min_step
         self.mv_max_step = int(self.num_train_timesteps * C(self.cfg.mv_max_step_percent, epoch, global_step)) \
             if self.cfg.mv_max_step_percent is not None else max_step
+        self.mv_guidance_scale = C(self.cfg.mv_guidance_scale, epoch, global_step)
