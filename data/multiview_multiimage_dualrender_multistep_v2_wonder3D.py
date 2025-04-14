@@ -980,6 +980,16 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
 
             real_batch_size = 1
             return_list = []
+
+
+            #################################################################################################
+            # sample the prompt
+            idx = np.random.randint(0, self.unsup_length)
+            image_path = self.unsup_image_library[idx]
+
+            guidance_utils = self.guidance_processor(image_paths = image_path)
+            condition_utils = self.condition_processor(image_paths = image_path)
+            
             # loop for n_steps
             for i in range(self.cfg.n_steps):
                     
@@ -1019,15 +1029,11 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
                 # sample distances from a uniform distribution bounded by distance_range
                 camera_distances: Float[Tensor, "B"] = torch.Tensor(self.camera_distance_list)
 
-                #################################################################################################
-                # sample the prompt
-                idx = np.random.randint(0, self.unsup_length)
-                image_path = self.unsup_image_library[idx]
 
                 return_dict = {
                         "image_path": image_path.replace("/", "_"),
-                        "guidance_utils": self.guidance_processor(image_paths = image_path),
-                        "condition_utils": self.condition_processor(image_paths = image_path),
+                        "guidance_utils": guidance_utils,
+                        "condition_utils": condition_utils,
                         # camera data
                         "azimuths_deg": azimuth_deg,
                         "elevations_deg": elevation_deg,
