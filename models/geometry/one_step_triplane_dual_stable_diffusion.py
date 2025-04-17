@@ -78,6 +78,9 @@ class StableDiffusionTriplaneDualAttention(BaseImplicitGeometry):
         if self.cfg.backbone == "one_step_triplane_dual_stable_diffusion":
             from ...extern.one_step_triplane_dual_sd_modules import OneStepTriplaneDualStableDiffusion as Generator
             self.space_generator = Generator(self.cfg.space_generator_config)
+        elif self.cfg.backbone == "one_step_triplane_dual_stable_diffusion_trd":
+            from ...extern.one_step_triplane_dual_sd_modules_trd import OneStepTriplaneDualStableDiffusionTRD as Generator
+            self.space_generator = Generator(self.cfg.space_generator_config)
         else:
             raise ValueError(f"Unknown backbone {self.cfg.backbone}")
 

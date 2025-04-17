@@ -924,15 +924,14 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
                     )
                 )
 
-                if i == 0: # only add the following items once
-                    # the following items are applied to both supervised and unsupervised data
-                    batch.update(
-                        {
-                            "noise": torch.randn(real_batch_size, *self.cfg.dim_gaussian).view(-1, *self.cfg.dim_gaussian[1:]) \
-                                if not self.cfg.pure_zeros \
-                                    else torch.zeros(real_batch_size, *self.cfg.dim_gaussian).view(-1, *self.cfg.dim_gaussian[1:]) 
-                        }
-                    )
+                # the following items are applied to both supervised and unsupervised data
+                batch.update(
+                    {
+                        "noise": torch.randn(real_batch_size, *self.cfg.dim_gaussian).view(-1, *self.cfg.dim_gaussian[1:]) \
+                            if not self.cfg.pure_zeros \
+                                else torch.zeros(real_batch_size, *self.cfg.dim_gaussian).view(-1, *self.cfg.dim_gaussian[1:]) 
+                    }
+                )
                 return_list.append(batch)
 
         return return_list
