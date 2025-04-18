@@ -477,7 +477,7 @@ class MultipromptDualRendererMultiStepGeneratorTRDSystem(BaseLift3DSystem):
                 # store gradients
                 loss_dec = (
                     fidelity_loss + regularization_loss
-                )  / self.cfg.gradient_accumulation_steps
+                )  / self.cfg.gradient_accumulation_steps / (1 if only_last_step else self.cfg.num_parts_training)
 
                 # why we need this?
                 # because self.manual_backward() will not work if the generator has no grad
@@ -568,7 +568,7 @@ class MultipromptDualRendererMultiStepGeneratorTRDSystem(BaseLift3DSystem):
         # why we need this?
         # because self.manual_backward() will not work if the decoder, renderer, or background has no grad
         loss_fake = self._fake_gradient(self.geometry) + self._fake_gradient(self.background)
-        self.manual_backward(loss_gen / self.cfg.gradient_accumulation_steps + 0 * loss_fake)
+        self.manual_backward(loss_gen / self.cfg.gradient_accumulation_steps / (1 if only_last_step else self.cfg.num_parts_training) + 0 * loss_fake)
 
         # update the weights
         if (batch_idx + 1) % self.cfg.gradient_accumulation_steps == 0:
