@@ -48,8 +48,8 @@ def sample_timesteps(
 
     return timesteps
 
-@threestudio.register("multiimage-dual-renderer-multistep-generator-system")
-class MultiimageDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
+@threestudio.register("multiimage-dual-renderer-multistep-generator-trd-system")
+class MultiimageDualRendererMultiStepGeneratorTRDSystem(BaseLift3DSystem):
     @dataclass
     class Config(BaseLift3DSystem.Config):
 
@@ -521,7 +521,6 @@ class MultiimageDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 else:
                      # Handle non-tensor values if needed, perhaps by repeating or raising error
                     pass
-
 
         noise_pred_batch = self.geometry.denoise(
             noisy_input = batched_noisy_input,
