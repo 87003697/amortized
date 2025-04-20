@@ -430,6 +430,7 @@ class MultiimageDualRendererMultiStepGeneratorTRDSystem(BaseLift3DSystem):
                 # more general case
                 cond_dict = prompt_utils.get_image_encodings()
                 batch["text_embed"] = cond_dict["text_embeddings_local"] # Keep this for compatibility with _compute_loss logging?
+                batch["text_embed_bg"] = cond_dict['image_embeddings_global']
             cond_trajectory.append(cond_dict)
 
             # record the latent
