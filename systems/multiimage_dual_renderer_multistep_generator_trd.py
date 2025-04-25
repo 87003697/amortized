@@ -48,8 +48,8 @@ def sample_timesteps(
 
     return timesteps
 
-@threestudio.register("multiimage-dual-renderer-multistep-generator-system")
-class MultiimageDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
+@threestudio.register("multiimage-dual-renderer-multistep-generator-trd-system")
+class MultiimageDualRendererMultiStepGeneratorTRDSystem(BaseLift3DSystem):
     @dataclass
     class Config(BaseLift3DSystem.Config):
 
@@ -430,6 +430,7 @@ class MultiimageDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 # more general case
                 cond_dict = prompt_utils.get_image_encodings()
                 batch["text_embed"] = cond_dict["text_embeddings_local"] # Keep this for compatibility with _compute_loss logging?
+                batch["text_embed_bg"] = cond_dict['image_embeddings_global']
             cond_trajectory.append(cond_dict)
 
             # record the latent
@@ -521,7 +522,6 @@ class MultiimageDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 else:
                      # Handle non-tensor values if needed, perhaps by repeating or raising error
                     pass
-
 
         noise_pred_batch = self.geometry.denoise(
             noisy_input = batched_noisy_input,
